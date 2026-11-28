@@ -61,7 +61,9 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     let vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
     let mut frame = Frame::new_pooled(vm.empty_code.clone());
     let value = ZStr::from("held value");
-    frame.tmps.resize(1024, Value::Str(value.clone()));
+    frame
+        .slots
+        .edit_tmps_storage(|t| t.resize(1024, Value::Str(value.clone())));
     frame.args.resize(1024, Some(Value::Str(value.clone())));
     frame
         .cold_mut()
@@ -82,7 +84,9 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     frame.closure = Some(object.clone());
     frame.cold_mut().generator = Some(object.clone());
     frame.cold_mut().pending_exc = Some(object.clone());
-    frame.tmps.push(Value::Object(object.clone()));
+    frame
+        .slots
+        .edit_tmps_storage(|t| t.push(Value::Object(object.clone())));
     frame.args.push(Some(Value::Object(object.clone())));
     frame
         .cold_mut()
@@ -96,7 +100,7 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     assert_eq!(object.refcount(), 9);
     frame.clear_for_pool(&vm.empty_code);
     assert_eq!(object.refcount(), 1);
-    assert_eq!(frame.tmps.capacity(), 0);
+    assert_eq!(frame.slots.edit_tmps_storage(|t| t.capacity()), 0);
     assert_eq!(frame.args.capacity(), 0);
     // The named arguments and the `@` masks went with the rare state.
     assert!(!frame.has_cold());
@@ -113,13 +117,13 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
 fn ordinary_buffers_retain_capacity_and_shared_stores_survive() {
     let vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
     let mut frame = Frame::new_pooled(vm.empty_code.clone());
-    frame.tmps.push(Value::Int(42));
-    let capacity = frame.tmps.capacity();
+    frame.slots.edit_tmps_storage(|t| t.push(Value::Int(42)));
+    let capacity = frame.slots.edit_tmps_storage(|t| t.capacity());
     frame.vars().borrow_mut().slots.push(Some(Value::Int(42)));
     let shared = frame.vars().clone();
     frame.clear_for_pool(&vm.empty_code);
-    assert_eq!(frame.tmps.capacity(), capacity);
-    assert!(frame.tmps.is_empty());
+    assert_eq!(frame.slots.edit_tmps_storage(|t| t.capacity()), capacity);
+    assert!(frame.slots.tmps().is_empty());
     assert!(!Rc::ptr_eq(&shared, frame.vars()));
     assert!(matches!(shared.borrow().slots[0], Some(Value::Int(42))));
     assert!(frame.vars().borrow().slots.is_empty());

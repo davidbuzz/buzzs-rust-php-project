@@ -958,6 +958,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
                 line: 0,
                 strict: false,
                 source: None,
+                class_cache: php_vm::class::AttrClassCache::default(),
             }]),
         );
     }

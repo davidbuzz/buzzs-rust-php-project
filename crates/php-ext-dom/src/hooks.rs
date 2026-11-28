@@ -24,8 +24,11 @@ thread_local! {
     /// long-running worker may reuse the address for another class. It
     /// has room for a typical request's classes from the start, so the
     /// first DOM object of a script does not allocate it.
-    static BUILTIN: std::cell::RefCell<std::collections::HashMap<usize, Option<&'static str>>> =
-        std::cell::RefCell::new(std::collections::HashMap::with_capacity(64));
+    static BUILTIN: std::cell::RefCell<rustc_hash::FxHashMap<usize, Option<&'static str>>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::with_capacity_and_hasher(
+            64,
+            rustc_hash::FxBuildHasher,
+        ));
 }
 
 /// Empties [`builtin_of_class`]'s cache for a new request.

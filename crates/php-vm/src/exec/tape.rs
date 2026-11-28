@@ -124,6 +124,9 @@ pub(crate) struct Tape {
     /// (`Inst.p`): see [`calls::NewSite`]. Grown outside the counted heap,
     /// like the op array's other run-time caches.
     new_sites: std::cell::RefCell<Vec<calls::NewSite>>,
+    /// The call plans of this tape's [`calls::CALL_PLAN`] instructions, by
+    /// op index (see [`calls::Plan`]).
+    plans: OnceCell<Box<[calls::PlanSlot]>>,
 }
 
 impl Tape {
@@ -133,6 +136,16 @@ impl Tape {
         self.insts.get_or_init(|| {
             php_memlimit::persistent(|| {
                 let tape = lower(code);
+                // A slot per call site that may get a plan.
+                let sites = tape
+                    .iter()
+                    .filter(|i| i.op == TOp::CallInit && i.k == calls::CALL_PLAN)
+                    .count();
+                if sites != 0 {
+                    let _ = self
+                        .plans
+                        .set((0..sites).map(|_| OnceCell::new()).collect());
+                }
                 // Tables only for a tape that has a loop the JIT could
                 // ever compile: without them `run_tape` picks the core
                 // without the back-edge hook for every frame of it.
@@ -336,8 +349,8 @@ unsafe fn frame_st(f: *mut Frame) -> St {
     // SAFETY: the caller's contract.
     let fr = unsafe { &mut *f };
     St {
-        cvs: fr.cvs.as_mut_ptr().cast(),
-        tmps: fr.tmps.as_mut_ptr().cast(),
+        cvs: fr.slots.cvs_mut().as_mut_ptr().cast(),
+        tmps: fr.slots.tmps_mut().as_mut_ptr().cast(),
         lits: fr.code.literals.as_ptr().cast(),
         f,
     }
@@ -1451,6 +1464,39 @@ tape_ops! {
 /// to [`super::spec::step_ref`] before the generic loop.
 #[inline(never)]
 fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
+    // `$obj[$k] = $v` of an object: no step writes it (the `ArrayAccess`
+    // write is `declined_vm_step`'s, which the caller tries next).
+    if let Some(&Op::AssignDimCv { cv, .. }) = ops.get(at) {
+        if matches!(
+            f.slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
+            Some(Value::Object(_))
+        ) {
+            return DECLINED;
+        }
+    }
+    // `(string) $obj`: no step converts an object (`declined_vm_step`'s).
+    if let Some(&Op::Cast {
+        kind: crate::opcode::CastKind::String,
+        a,
+        ..
+    }) = ops.get(at)
+    {
+        let obj = match a {
+            Operand::Cv(cv) => f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize),
+            _ => None,
+        };
+        if matches!(obj, Some(Value::Object(_))) {
+            return DECLINED;
+        }
+    }
     let next = hot::step(f, ops, lits, at);
     if next != DECLINED {
         return next;
@@ -1897,6 +1943,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     tape.push(Inst::plain(TOp::Exit));
     dims::shape_literals(code, &mut tape);
     calls::number_new_sites(&mut tape);
+    calls::number_plan_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a
     // specialised instruction when the tape also runs what follows it.
@@ -1907,10 +1954,16 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         // return itself (`Vm::return_simple`), or, at the base of a nested
         // execution, `Vm::run_base_on_tape` makes it right after the tape
         // (`__toString()`'s `return $this->name;`, a property read and the
-        // return, called from native code).
+        // return, called from native code). So does a `DoCall` (its row an
+        // exit the tape takes itself, `run_call`): a call without
+        // arguments right after its start, as in a callback's
+        // `return $item->getName();`.
         tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
             && (tape.get(follows).is_some_and(|next| next.op != TOp::Exit)
-                || matches!(code.ops.get(follows), Some(Op::Return { .. })));
+                || matches!(
+                    code.ops.get(follows),
+                    Some(Op::Return { .. } | Op::DoCall { .. })
+                ));
     }
     tape.into_boxed_slice()
 }
@@ -1963,8 +2016,8 @@ pub(super) fn worth_entering(code: &OpArray, at: usize) -> bool {
 #[allow(clippy::inline_always)] // three tests on the way into the loop
 fn usable(f: &Frame, code: &OpArray) -> bool {
     !f.symtab_attached
-        && f.cvs.len() >= code.cv_names.len()
-        && f.tmps.len() >= code.num_tmps as usize
+        && f.slots.cvs().len() >= code.cv_names.len()
+        && f.slots.tmps().len() >= code.num_tmps as usize
 }
 
 /// Runs the hot ops of the current frame (the one `code` belongs to) from
@@ -2027,6 +2080,8 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     // switch (two lookups of the top frame per switch cost ~13
     // instructions each).
     let mut reload = false;
+    // The plain return just tried in the loop declined: not tried again.
+    let mut ret_declined = false;
     'frames: loop {
         let Some(f) = vm.frames.last_mut() else {
             if reload {
@@ -2047,14 +2102,14 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         // only hot ops run, which neither push nor pop frames nor replace
         // a frame's `code`; and `Vm::run`, which gets this frame's `ip`
         // back with `SWITCHED`, reloads the op array from the frame itself.
-        let c: &OpArray = unsafe { &*code };
-        let ops: &[Op] = &c.ops;
-        let lits: &[Value] = &c.literals;
+        let mut c: &OpArray = unsafe { &*code };
+        let mut ops: &[Op] = &c.ops;
+        let mut lits: &[Value] = &c.literals;
         let at = if fresh || usable(f, c) {
             fresh = false;
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
-            let tbase = tape.as_ptr();
+            let mut tbase = tape.as_ptr();
             // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
             // counts hot back edges through them and may run or compile a
             // trace. Built once per frame entry (two relaxed loads off the
@@ -2078,8 +2133,8 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 // out of the core (none of them resizes one, but none is
                 // bound not to replace its buffer).
                 let st = St {
-                    cvs: f.cvs.as_mut_ptr().cast(),
-                    tmps: f.tmps.as_mut_ptr().cast(),
+                    cvs: f.slots.cvs_mut().as_mut_ptr().cast(),
+                    tmps: f.slots.tmps_mut().as_mut_ptr().cast(),
                     lits: lits.as_ptr().cast(),
                     f: std::ptr::from_mut(f),
                 };
@@ -2107,7 +2162,39 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     WHY_CALL => {
                         // SAFETY: `out.ip` points into the tape (the
                         // instruction that stopped the core).
-                        let next = run_call(vm, &mut prep, ops, lits, at, unsafe { &*out.ip });
+                        // A call site with a plan: the whole call, from
+                        // its init to the callee's first op.
+                        // SAFETY: `out.ip` points into the tape.
+                        let site = unsafe { (*out.ip).p };
+                        let planned = unsafe { (*out.ip).k } == calls::CALL_PLAN
+                            && prep.is_none()
+                            && calls::has_plan(c, site)
+                            && calls::call_plain(vm, c, at, site);
+                        // The callee's tape taken up right here, without a
+                        // round through the frame loop (`ZEND_VM_ENTER`):
+                        // only from a tape without the JIT's back-edge
+                        // hook, into one without it.
+                        if planned && jctx.is_none() {
+                            switched = SWITCHED;
+                            // SAFETY: the callee's frame is current.
+                            if let Some((nc, nf, nb, np)) = unsafe { take_up(vm) } {
+                                code = nc;
+                                // SAFETY: held by the frame `nf`.
+                                c = unsafe { &*nc };
+                                ops = &c.ops;
+                                lits = &c.literals;
+                                tbase = nb;
+                                fp = nf;
+                                p = np;
+                                continue;
+                            }
+                        }
+                        let next = if planned {
+                            ENTERED
+                        } else {
+                            // SAFETY: as above.
+                            run_call(vm, &mut prep, c, ops, lits, at, unsafe { &*out.ip })
+                        };
                         if next == ENTERED {
                             // The call was entered: the tape goes on in the
                             // callee's frame, as after an entered `DoCall`
@@ -2180,6 +2267,41 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     // SAFETY: `out.ip` points into the tape (as above).
                     WHY_STEP if unsafe { (*out.ip).ext } => hot::step_ext(f, ops, lits, at),
                     WHY_STEP => step_slow(f, ops, lits, at),
+                    // `ZEND_RETURN` of a plain call's frame into a caller
+                    // on a tape without the JIT's back-edge hook: the
+                    // caller's tape taken up right here (`ZEND_VM_LEAVE`).
+                    WHY_EXIT
+                        if jctx.is_none()
+                            && f.plain
+                            && prep.is_none()
+                            && matches!(ops.get(at), Some(Op::Return { .. })) =>
+                    {
+                        let Some(&Op::Return { val }) = ops.get(at) else {
+                            break at;
+                        };
+                        if !vm.return_plain::<false>(val, base, at + 1) {
+                            ret_declined = true;
+                            break at;
+                        }
+                        switched = SWITCHED;
+                        // SAFETY: the caller's frame is current.
+                        if let Some((nc, nf, nb, np)) = unsafe { take_up(vm) } {
+                            code = nc;
+                            // SAFETY: held by the frame `nf`.
+                            c = unsafe { &*nc };
+                            ops = &c.ops;
+                            lits = &c.literals;
+                            tbase = nb;
+                            fp = nf;
+                            p = np;
+                            continue;
+                        }
+                        if crate::interrupt::safe_point_due() {
+                            return (0, LEFT);
+                        }
+                        reload = true;
+                        continue 'frames;
+                    }
                     WHY_POLL => {
                         flush(vm, &mut prep);
                         // SAFETY: as above.
@@ -2341,7 +2463,22 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             Some(&Op::Return { val }) => {
                 flush(vm, &mut prep);
                 fresh = false;
-                vm.return_simple(val, base, at + 1).is_some()
+                // (The mark is tested here: a frame without it pays no
+                // call for the attempt.)
+                let plain = vm.frames.last().is_some_and(|f| f.plain);
+                // (Declined in the loop just now: not tried again.)
+                let tried = std::mem::take(&mut ret_declined);
+                (plain && !tried && vm.return_plain::<false>(val, base, at + 1)) || {
+                    // The base frame of the nested execution
+                    // `Vm::run_base_on_tape` runs: it ends here.
+                    if plain
+                        && vm.tape_base == base + 1
+                        && vm.return_plain::<true>(val, base, at + 1)
+                    {
+                        return (0, hot::BASE_RETURNED);
+                    }
+                    vm.return_simple(val, base, at + 1).is_some()
+                }
             }
             _ => false,
         };
@@ -2359,6 +2496,43 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         // the top of the loop.
         reload = true;
     }
+}
+
+/// The current frame of `vm`, which a call or a return just made current,
+/// for [`run_tape`]'s loop to go on in without a round through its frame
+/// loop: its op array, the frame, its tape and the instruction at its
+/// resume point. `None` when a safe point is due, its tape has the JIT's
+/// tables (the loop then needs the back-edge hook) or the frame is not
+/// [`usable`].
+///
+/// # Safety
+/// The op array returned is held by the frame; it is valid while the frame
+/// stays current, as `run_tape`'s `code` is.
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice in `run_tape`, a few loads
+unsafe fn take_up(vm: &mut Vm) -> Option<(*const OpArray, *mut Frame, *const Inst, *const Inst)> {
+    if crate::interrupt::safe_point_due() {
+        return None;
+    }
+    let f = vm.frames.last_mut()?;
+    let code = Rc::as_ptr(&f.code);
+    // SAFETY: held by the frame.
+    let c: &OpArray = unsafe { &*code };
+    let tape = c.tape.insts.get()?;
+    if !c
+        .tape
+        .jit_cnt
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .is_null()
+        || !usable(f, c)
+    {
+        return None;
+    }
+    let base = tape.as_ptr();
+    // SAFETY: a resume point is an op index of the op array, at most the
+    // index of the tape's sentinel.
+    let p = unsafe { base.add(f.ip.min(c.ops.len())) };
+    Some((code, std::ptr::from_mut(f), base, p))
 }
 
 /// Whether the current frame's newest pending call is of a builtin.
@@ -2427,6 +2601,7 @@ fn flush_cold(vm: &mut Vm, prep: &mut Option<calls::Prepared>) {
 fn run_call(
     vm: &mut Vm,
     prep: &mut Option<calls::Prepared>,
+    code: &OpArray,
     ops: &[Op],
     lits: &[Value],
     at: usize,
@@ -2439,6 +2614,11 @@ fn run_call(
             ..
         }) => {
             flush(vm, prep);
+            // A site that may get a call plan (a namespaced user function):
+            // worked out once its cache is filled.
+            if inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_fcall(code, at, inst.p);
+            }
             if let Some(call) = calls::prepare_ns(vm, name, lits.len() + at + 1) {
                 // A leaf builtin with plain arguments: called at once.
                 if call.is_native() {
@@ -2451,6 +2631,9 @@ fn run_call(
         }
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
+            if inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_fcall(code, at, inst.p);
+            }
             // `f(<expression>)` of a builtin that needs no handler: nothing
             // to ready; its `Send` makes the call.
             if inst.k == calls::CALL_QUICK {
@@ -2504,6 +2687,13 @@ fn run_call(
                 if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
                     return next;
                 }
+            } else if inst.k == calls::CALL_PLAN
+                && site_accessor == 1
+                && calls::plan_missing(code, inst.p)
+            {
+                // A site that may get a call plan (a user method that is
+                // no accessor): worked out for this object's class.
+                plan_method_site(vm, code, obj, lit, at, inst.p);
             }
             if let Some(call) = calls::prepare_method(vm, obj, lit, at, resolved) {
                 return send_and_enter(vm, prep, call, ops, at);
@@ -2567,6 +2757,11 @@ fn run_call(
                 (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
                 _ => None,
             };
+            // A site that may get a call plan: worked out once its cache
+            // holds what this call resolved.
+            if call.is_some() && inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_static(code, at, inst.p);
+            }
             return match call {
                 Some(call) => send_and_enter(vm, prep, call, ops, at),
                 None => DECLINED,
@@ -2649,6 +2844,37 @@ fn run_call(
     hot::step_ext(f, ops, lits, at)
 }
 
+/// Works out the call plan of the method call site at `at` for the class
+/// of the object `obj` holds now and the calling scope
+/// ([`calls::plan_build_method`]).
+#[cold]
+#[inline(never)]
+fn plan_method_site(vm: &Vm, code: &OpArray, obj: Operand, lit: u32, at: usize, site: usize) {
+    let Some(f) = vm.frames.last() else {
+        return;
+    };
+    let o = match obj {
+        Operand::Cv(cv) => f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.slots.tmps().get(t as usize),
+        _ => None,
+    };
+    let o = match (obj, o) {
+        (Operand::Unused, _) => f.this.as_ref(),
+        (_, Some(Value::Object(o))) => Some(o),
+        _ => None,
+    };
+    let Some(o) = o else {
+        return;
+    };
+    let cls_addr = Rc::as_ptr(crate::object::class_of(o)) as usize;
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    calls::plan_build_method(code, at, site, obj, cls_addr, scope_addr, lit);
+}
+
 /// `$obj->$name()` (`Op::InitMethodCall` with a variable or temporary
 /// name) whose call site's method cache missed: a site whose name changes
 /// from call to call (`$this->$method($value)` over a list of options)
@@ -2669,8 +2895,12 @@ fn init_dyn_method_call_vm(vm: &mut Vm, obj: Operand, name: Operand, at: usize) 
         return DECLINED;
     }
     let peek = |o: Operand| match o {
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
-        Operand::Tmp(t) => f.tmps.get(t as usize),
+        Operand::Cv(cv) => f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.slots.tmps().get(t as usize),
         _ => None,
     };
     let obj_ok = match obj {
@@ -2717,6 +2947,21 @@ fn declined_vm_step(
     ops: &[Op],
     at: usize,
 ) -> usize {
+    if matches!(
+        ops.get(at),
+        Some(Op::AssignDimCv { .. } | Op::FetchDimCv { .. })
+    ) {
+        return declined_dim_object(vm, prep, ops, at);
+    }
+    if matches!(
+        ops.get(at),
+        Some(Op::Cast {
+            kind: crate::opcode::CastKind::String,
+            ..
+        })
+    ) {
+        return declined_cast_object(vm, prep, ops, at);
+    }
     // `$cv += $array` (`Vm::array_union_cv`, `Vm::run`'s arm's fast path):
     // the frame's own data only, no user code.
     if let Some(&Op::AssignOpCv {
@@ -2897,6 +3142,19 @@ fn declined_vm_step(
             }
         };
     }
+    DECLINED
+}
+
+/// [`declined_vm_step`] of `(string) $obj` (`ZEND_CAST` calling
+/// `__toString()`: Lodata's `$this->array[(string) $key] = $value`):
+/// `Vm::run`'s arm, here, tried before the other ops' arms. `DECLINED`,
+/// nothing changed, for anything else.
+fn declined_cast_object(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
     // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
     // `$this->array[(string) $key] = $value`): `Vm::run`'s arm, here.
     if let Some(&Op::Cast {
@@ -2912,10 +3170,15 @@ fn declined_vm_step(
             !f.symtab_attached
                 && match a {
                     Operand::Cv(cv) => matches!(
-                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        f.slots
+                            .cvs()
+                            .get(cv as usize)
+                            .and_then(crate::vm::CvSlot::get),
                         Some(Value::Object(_))
                     ),
-                    Operand::Tmp(t) => matches!(f.tmps.get(t as usize), Some(Value::Object(_))),
+                    Operand::Tmp(t) => {
+                        matches!(f.slots.tmps().get(t as usize), Some(Value::Object(_)))
+                    }
                     _ => false,
                 }
         };
@@ -2924,9 +3187,20 @@ fn declined_vm_step(
         }
         flush(vm, prep);
         vm.frame_mut().ip = at + 1;
-        let r = vm
-            .read(a)
-            .and_then(|x| vm.cast(crate::opcode::CastKind::String, a, x));
+        let r = vm.read(a).and_then(|x| {
+            // A user `__toString()` called at once (`zend_std_cast_object_tostring`),
+            // without the runtime's conversion layers; a class with a
+            // cast handler of its own, or without the method, as `Vm::cast`
+            // converts it.
+            if let Value::Object(o) = &x {
+                if crate::ext::hooks_of(o).and_then(|h| h.cast).is_none() {
+                    if let Some(s) = vm.object_to_string_opt(o)? {
+                        return Ok(Value::Str(s));
+                    }
+                }
+            }
+            vm.cast(crate::opcode::CastKind::String, a, x)
+        });
         return match r {
             Ok(v) => {
                 vm.set_tmp(dst, v);
@@ -2938,6 +3212,20 @@ fn declined_vm_step(
             }
         };
     }
+    DECLINED
+}
+
+/// [`declined_vm_step`] of a dimension of an object (`$obj[$k] = $v`,
+/// `$obj[$k]`): the class's user `ArrayAccess` method
+/// (`Vm::assign_dim_array_access`, `Vm::fetch_dim_array_access`), tried
+/// before the other ops' arms. `DECLINED`, nothing changed, for anything
+/// else.
+fn declined_dim_object(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
     let cv = match ops.get(at) {
         Some(&Op::AssignDimCv { cv, .. } | &Op::FetchDimCv { cv, .. }) => cv,
         _ => return DECLINED,
@@ -2945,7 +3233,7 @@ fn declined_vm_step(
     let is_object = vm
         .frames
         .last()
-        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(|f| f.slots.cvs().get(cv as usize))
         .and_then(crate::vm::CvSlot::get)
         .is_some_and(|v| matches!(v, Value::Object(_)));
     if !is_object {
@@ -3125,7 +3413,8 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
                 return DECLINED;
             };
             let undefined = |cv: u32| {
-                f.cvs
+                f.slots
+                    .cvs()
                     .get(cv as usize)
                     .and_then(crate::vm::CvSlot::get)
                     .is_none()
@@ -3298,7 +3587,7 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
 fn bind_target_plain(vm: &Vm, cv: u32) -> bool {
     vm.frames
         .last()
-        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(|f| f.slots.cvs().get(cv as usize))
         .is_some_and(|slot| {
             matches!(
                 slot.get(),
@@ -3333,9 +3622,8 @@ pub(super) fn global_slot_addr(vm: &Vm, f: &Frame, at: usize) -> usize {
                 Some(GlobalSlot::GlobalCv(cv)) => {
                     return vm
                         .frames
-                        .vec
-                        .first()
-                        .and_then(|main| main.cvs.get(cv as usize))
+                        .pooled(0)
+                        .and_then(|main| main.slots.cvs().get(cv as usize))
                         .map_or(0, |slot| std::ptr::from_ref(slot) as usize);
                 }
                 Some(GlobalSlot::GlobalStore(idx)) => Some(idx),

@@ -572,7 +572,8 @@ fn class_handles(vm: &Vm) -> ClassHandles {
         };
         for (i, name) in f.code.cv_names.iter().enumerate() {
             let Some(cv_id) = f
-                .cvs
+                .slots
+                .cvs()
                 .get(i)
                 .and_then(crate::vm::CvSlot::get)
                 .and_then(identity)

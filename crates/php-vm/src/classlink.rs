@@ -265,7 +265,12 @@ impl Vm {
             if f.symtab_attached {
                 return None;
             }
-            return match f.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)? {
+            return match f
+                .slots
+                .cvs()
+                .get(*cv as usize)
+                .and_then(crate::vm::CvSlot::get)?
+            {
                 Value::Object(o) => Some(Value::Str(object::class_of(o).name.clone())),
                 _ => None,
             };
@@ -354,8 +359,8 @@ impl Vm {
         if f.symtab_attached {
             return None;
         }
-        let v = f.cvs.get(a as usize)?.get()?;
-        let c = f.cvs.get(b as usize)?.get()?;
+        let v = f.slots.cvs().get(a as usize)?.get()?;
+        let c = f.slots.cvs().get(b as usize)?.get()?;
         if matches!(v, Value::Reference(_)) {
             return None;
         }
@@ -3788,7 +3793,7 @@ fn build_class(
 /// name ([`Vm::lookup_class`], [`Vm::find_class`]) on a hit allocated
 /// two buffers (the lower-case copy and the string made of it) for a
 /// key the table is searched by as bytes.
-fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
+pub(crate) fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
     let mut buf = [0u8; 128];
     if let Some(lc) = buf.get_mut(..name.len()) {
         lc.copy_from_slice(name);
@@ -3952,6 +3957,18 @@ thread_local! {
     static LINK_IMPURE: Cell<bool> = const { Cell::new(false) };
     /// The current request's number ([`end_request`]).
     static EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+/// The current request's number: what a cache of class lookups
+/// ([`crate::class::AttrClassCache`]) is valid for.
+pub(crate) fn request_epoch() -> u64 {
+    EPOCH.with(Cell::get)
+}
+
+/// Whether class lookups are being recorded for a link (a cached lookup
+/// would escape the record).
+pub(crate) fn lookups_logged() -> bool {
+    LOGGING.with(Cell::get)
 }
 
 /// Records a class lookup of the link being recorded.

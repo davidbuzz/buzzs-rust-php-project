@@ -257,11 +257,12 @@ impl Vm {
         }
         let k = match key {
             Operand::Cv(cv) => f
-                .cvs
+                .slots
+                .cvs()
                 .get(cv as usize)
                 .and_then(crate::vm::CvSlot::get)
                 .cloned(),
-            Operand::Tmp(x) | Operand::TmpKeep(x) => f.tmps.get(x as usize).cloned(),
+            Operand::Tmp(x) | Operand::TmpKeep(x) => f.slots.tmps().get(x as usize).cloned(),
             Operand::Lit(l) => f.code.literals.get(l as usize).cloned(),
             Operand::Unused => None,
         };
@@ -437,7 +438,9 @@ mod fl {
     pub(super) const IN_ARRAY: u32 = 14;
     /// `str_replace(string, string, string)` with a replacement no longer
     /// than the search string (a growing result first reserves its memory,
-    /// which can fail with the memory-limit fatal).
+    /// which can fail with the memory-limit fatal), and
+    /// `str_replace(array, string, string)` of search strings none shorter
+    /// than the replacement (another element is converted, which can warn).
     pub(super) const STR_REPLACE: u32 = 15;
     /// `strtr(string, string, string)`.
     pub(super) const STRTR: u32 = 16;
@@ -546,8 +549,8 @@ pub(crate) mod leaf {
     pub(crate) const CLASS_EXISTS: u8 = 8;
     /// `assert(true)`.
     pub(crate) const ASSERT: u8 = 9;
-    /// `mb_strlen()` in the default encoding or UTF-8 (another name can
-    /// be invalid).
+    /// `mb_strlen()` in the default encoding (also given as null) or UTF-8
+    /// (another name can be invalid).
     pub(crate) const MB_STRLEN: u8 = 10;
     /// `mb_substr()`, likewise.
     pub(crate) const MB_SUBSTR: u8 = 11;
@@ -570,6 +573,15 @@ pub(crate) mod leaf {
     /// `ucfirst()`, `lcfirst()`, `crc32()`, `function_exists()` of a
     /// string.
     pub(crate) const STR1: u8 = 19;
+    /// `preg_match(string, string)` (no `$matches`: by reference) of a
+    /// pattern the PCRE extension has compiled ([`crate::ext::preg_leaf`]).
+    pub(crate) const PREG_MATCH: u8 = 20;
+    /// `preg_replace(string, string, string)`, likewise.
+    pub(crate) const PREG_REPLACE: u8 = 21;
+    /// `is_callable(object)`: a closure or an object with `__invoke()`
+    /// (a string or an array names a function or method, which may
+    /// autoload or deprecate).
+    pub(crate) const IS_CALLABLE: u8 = 22;
 }
 
 /// The [`leaf`] class of the builtin function named `lc` (lower case).
@@ -597,6 +609,9 @@ pub(crate) fn leaf_id(lc: &[u8]) -> u8 {
         b"strcspn" | b"strspn" | b"strcmp" | b"strcasecmp" => leaf::STR2,
         b"preg_quote" => leaf::PREG_QUOTE,
         b"ucfirst" | b"lcfirst" | b"crc32" | b"function_exists" => leaf::STR1,
+        b"preg_match" => leaf::PREG_MATCH,
+        b"preg_replace" => leaf::PREG_REPLACE,
+        b"is_callable" => leaf::IS_CALLABLE,
         _ => leaf::NONE,
     }
 }
@@ -626,8 +641,12 @@ impl Vm {
             | (leaf::METHOD_EXISTS, [Object(_), Str(_)])
             | (leaf::CLASS_EXISTS, [Str(_), Bool(false)])
             | (leaf::ASSERT, [Bool(true)] | [Bool(true), _])
-            | (leaf::MB_STRLEN, [Str(_)])
-            | (leaf::MB_SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
+            // (A null encoding is the default one.)
+            | (leaf::MB_STRLEN, [Str(_)] | [Str(_), Null])
+            | (
+                leaf::MB_SUBSTR,
+                [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null] | [Str(_), Int(_), Int(_) | Null, Null],
+            )
             | (leaf::MB_STRPOS | leaf::STR2, [Str(_), Str(_)])
             | (leaf::ARRAY1, [Array(_)])
             | (leaf::ARRAY_BOOL, [Array(_)] | [Array(_), Bool(_)])
@@ -638,7 +657,8 @@ impl Vm {
                 | [Array(_), Int(_), Int(_) | Null, Bool(_)],
             )
             | (leaf::PREG_QUOTE, [Str(_)] | [Str(_), Str(_) | Null])
-            | (leaf::STR1, [Str(_)]) => true,
+            | (leaf::STR1, [Str(_)])
+            | (leaf::IS_CALLABLE, [Object(_)]) => true,
             (leaf::EXPLODE, [Str(sep), Str(_)]) | (leaf::EXPLODE, [Str(sep), Str(_), Int(_)]) => {
                 !sep.is_empty()
             }
@@ -653,6 +673,10 @@ impl Vm {
                 is_utf8_name(enc.as_bytes())
             }
             (leaf::ARRAYS, [_, ..]) => args.iter().all(|a| matches!(a, Array(_))),
+            (leaf::PREG_MATCH, [Str(pattern), Str(_)])
+            | (leaf::PREG_REPLACE, [Str(pattern), Str(_), Str(_)]) => {
+                crate::ext::preg_leaf(pattern)
+            }
             _ => false,
         }
     }
@@ -782,8 +806,37 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
         (fl::INTDIV, [Some(Int(dividend)), Some(Int(divisor))]) => {
             *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
         }
+        (fl::STRTR, [Some(Str(_)), Some(Array(pairs))]) => scalar_replacements(pairs),
+        (fl::STR_REPLACE, [Some(Array(search)), Some(Str(replace)), Some(Str(_))]) => {
+            no_longer_searches(search, replace.len())
+        }
         _ => false,
     }
+}
+
+/// Whether `str_replace(array, string, string)` with the search strings
+/// `search` and a replacement of `replace_len` bytes reports nothing: every
+/// element is a string (another is converted, which can warn) and none is
+/// shorter than the replacement (the result cannot grow, so no memory is
+/// reserved first).
+fn no_longer_searches(search: &php_runtime::ZArray, replace_len: usize) -> bool {
+    search
+        .values()
+        .all(|v| matches!(v, Value::Str(s) if s.len() >= replace_len))
+}
+
+/// Whether `strtr(string, array)` of `pairs` reports nothing: no key is
+/// the empty string ("Ignoring replacement of empty string") and every
+/// replacement is a scalar or null, converted to a string silently (an
+/// array or an object warns or throws).
+fn scalar_replacements(pairs: &php_runtime::ZArray) -> bool {
+    pairs.iter().all(|(k, v)| {
+        !matches!(k, php_runtime::ArrayKey::Str(s) if s.is_empty())
+            && matches!(
+                v,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
+    })
 }
 
 /// [`frameless_args`] of two or three arguments read in place: the same
@@ -798,6 +851,10 @@ fn frameless_args_ref(class: u32, args: &[&Value]) -> bool {
         | (fl::SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
         | (fl::STRTR, [Str(_), Str(_), Str(_)])
         | (fl::KEY_EXISTS, [Str(_) | Int(_), Array(_)]) => true,
+        (fl::STRTR, [Str(_), Array(pairs)]) => scalar_replacements(pairs),
+        (fl::STR_REPLACE, [Array(search), Str(replace), Str(_)]) => {
+            no_longer_searches(search, replace.len())
+        }
         (fl::TRIM, [Str(_), Str(chars)]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Str(_), Int(levels)]) => *levels >= 1,
         (fl::STRPOS, [Str(haystack), Str(_), Int(offset)]) => {
@@ -1694,11 +1751,8 @@ impl Vm {
         if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
             return None;
         }
-        let live = self.frames.live;
-        let (callers, pool) = self.frames.vec.split_at_mut(live);
-        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-            return None;
-        };
+        let live = self.frames.len();
+        let (caller, frame) = self.frames.both_mut(live)?;
         if caller.calls.len() != calls_len
             || frame.args.len() != n
             || !frameless_args(class, &frame.args)
@@ -1747,6 +1801,55 @@ impl Vm {
         self.frameless_handler_call(b, n, dst, live)
     }
 
+    /// The call of leaf builtin `b` (`leaf_id`) whose `n` arguments were
+    /// sent into the argument buffer of the pooled frame above the current
+    /// one (an argument computed between the call's start and its sends,
+    /// `assert($x instanceof C)`, which `calls::leaf_now` cannot read
+    /// ahead): when they have a shape of its leaf class
+    /// ([`Vm::leaf_args`]: the handler then reports nothing, throws
+    /// nothing, runs no PHP code and looks at no frame), the handler runs
+    /// on the caller's frame as a frameless function's does
+    /// ([`Vm::frameless_handler_call`]), `caller_ip` saved as the resume
+    /// point. `None`, nothing changed, for any other call.
+    pub(crate) fn leaf_prepared(
+        &mut self,
+        b: &Rc<Builtin>,
+        n: usize,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        const MAX: usize = 4;
+        let id = b.leaf_id();
+        if id == leaf::NONE
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || self.observer.enabled
+            || n > MAX
+            || b.sends_ref_within(n)
+        {
+            return None;
+        }
+        let live = self.frames.len();
+        {
+            let caller = self.frames.pooled(live.checked_sub(1)?)?;
+            let frame = self.frames.pooled(live)?;
+            if caller.calls.len() != calls_len || frame.args.len() != n {
+                return None;
+            }
+            let mut sent: [&Value; MAX] = [&Value::Null; MAX];
+            for (slot, arg) in sent.iter_mut().zip(&frame.args) {
+                *slot = arg.as_ref()?;
+            }
+            if !self.leaf_args(id, &sent[..n]) {
+                return None;
+            }
+        }
+        if let Some(caller) = self.frames.pooled_mut(live - 1) {
+            caller.ip = caller_ip;
+        }
+        self.frameless_handler_call(b, n, dst, live)
+    }
+
     /// The handler of builtin `b` called on the caller's frame with the
     /// `n` arguments sent into the argument buffer of the pooled frame at
     /// `live` (moved out of it: the buffer is left empty) and the declared
@@ -1768,7 +1871,7 @@ impl Vm {
         let mut args = self.call_bufs.take_args();
         args.values.reserve(b.signature().params.len().max(n));
         {
-            let sent = &mut self.frames.vec[live].args;
+            let sent = &mut self.frames.pooled_at_mut(live).args;
             args.values
                 .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
             sent.clear();
@@ -1838,7 +1941,7 @@ impl Vm {
                 let Some(slot) = self
                     .frames
                     .last_mut()
-                    .and_then(|f| f.tmps.get_mut(d as usize))
+                    .and_then(|f| f.slots.tmps_mut().get_mut(d as usize))
                 else {
                     drop(v);
                     return;
@@ -1949,8 +2052,8 @@ impl Vm {
             for (slot, operand) in refs.iter_mut().zip(&fc.vals[..n]) {
                 let v = match *operand {
                     Operand::Lit(l) => frame.code.literals.get(l as usize)?,
-                    Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
-                    Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                    Operand::Cv(cv) => frame.slots.cvs().get(cv as usize)?.get()?,
+                    Operand::Tmp(t) => frame.slots.tmps().get(t as usize)?,
                     _ => return None,
                 };
                 if matches!(v, Value::Reference(_)) {
@@ -2006,7 +2109,7 @@ impl Vm {
         // them).
         for operand in &fc.vals[..n] {
             if let Operand::Tmp(t) = *operand {
-                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                     drop(std::mem::take(slot));
                 }
             }
@@ -2042,8 +2145,8 @@ impl Vm {
             let frame = self.frames.last()?;
             let arg = match fc.vals[0] {
                 Operand::Lit(l) => frame.code.literals.get(l as usize)?,
-                Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
-                Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                Operand::Cv(cv) => frame.slots.cvs().get(cv as usize)?.get()?,
+                Operand::Tmp(t) => frame.slots.tmps().get(t as usize)?,
                 _ => return None,
             };
             if matches!(arg, Value::Reference(_)) || !frameless_arg1(class, arg) {
@@ -2059,7 +2162,7 @@ impl Vm {
         let frame = self.frames.last_mut()?;
         // A temporary argument is consumed (its `Send` would have moved it).
         if let Operand::Tmp(t) = fc.vals[0] {
-            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+            if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -2193,13 +2296,19 @@ impl Vm {
                 return Some(r);
             }
         }
-        if fc.argc >= 2 {
+        let n = usize::from(fc.argc).min(3);
+        // Whether a two- or three-argument call has an answer without its
+        // handler (`frameless_two`, the quick rows); for the others
+        // (`strtr()`, `str_replace()`, `strstr()`, ...) neither is tried.
+        let has_quick = n < 2
+            || matches!(class, fl::STR_TEST | fl::KEY_EXISTS | fl::IN_ARRAY)
+            || quick_id_n(b.name.as_bytes(), n).is_some();
+        if n >= 2 && has_quick {
             if let Some(r) = self.frameless_many(&b, class, fc, ip) {
                 return Some(r);
             }
         }
         let frame = self.frames.last_mut()?;
-        let n = usize::from(fc.argc).min(3);
         // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
         // written once, where the handler reads it: a literal's copy, a
         // variable's value (a reference's target). The record is a pooled
@@ -2215,7 +2324,8 @@ impl Vm {
                     .get(l as usize)
                     .map(crate::func::copy_arg),
                 Operand::Cv(cv) => frame
-                    .cvs
+                    .slots
+                    .cvs()
                     .get(cv as usize)
                     .and_then(crate::vm::CvSlot::get)
                     .map(|v| match v {
@@ -2225,7 +2335,7 @@ impl Vm {
                 // An argument computed before the op: a copy for now; the
                 // temporary is released below, once the call is known to
                 // run here (its `Send` would have moved it).
-                Operand::Tmp(t) => frame.tmps.get(t as usize).map(|v| match v {
+                Operand::Tmp(t) => frame.slots.tmps().get(t as usize).map(|v| match v {
                     Value::Reference(r) => r.get(),
                     v => crate::func::copy_arg(v),
                 }),
@@ -2252,7 +2362,7 @@ impl Vm {
         }
         for operand in &fc.vals[..n] {
             if let Operand::Tmp(t) = *operand {
-                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                     drop(std::mem::take(slot));
                 }
             }
@@ -2264,7 +2374,7 @@ impl Vm {
             // then what the tape's quick rows answer for global names
             // (`strpos()`, `substr()`, `max()`, `min()`, strict `in_array()`:
             // `quick_eval_2`/`_3`, `None` for shapes they do not take).
-            2 | 3 => {
+            2 | 3 if has_quick => {
                 let sent = [args.values.first(), args.values.get(1), args.values.get(2)];
                 self.frameless_two(b.name.as_bytes(), class, &sent[..n])
                     .or_else(|| {
@@ -2344,8 +2454,32 @@ impl Vm {
 mod tests {
     use super::{
         fl, frameless_arg1, frameless_args, frameless_args_ref, frameless_call, frameless_flags,
-        frameless_inline,
+        frameless_inline, leaf,
     };
+
+    /// `mb_strlen()` and `mb_substr()` with a null encoding (the default
+    /// one, as Laravel's `Str::length($value, $encoding = null)` passes it)
+    /// are leaf calls; an encoding name other than UTF-8, a non-string
+    /// subject and a non-int offset are not.
+    #[test]
+    fn mbstring_leaf_shapes_take_a_null_encoding() {
+        use php_runtime::ZStr;
+        let vm = crate::vm::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let s = Value::Str(ZStr::from("héllo"));
+        let utf8 = Value::Str(ZStr::from("UTF-8"));
+        let other = Value::Str(ZStr::from("ISO-8859-1"));
+        let (one, null) = (Value::Int(1), Value::Null);
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s]));
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s, &null]));
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s, &utf8]));
+        assert!(!vm.leaf_args(leaf::MB_STRLEN, &[&s, &other]));
+        assert!(!vm.leaf_args(leaf::MB_STRLEN, &[&one, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &one, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &utf8]));
+        assert!(!vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &other]));
+        assert!(!vm.leaf_args(leaf::MB_SUBSTR, &[&s, &s, &null, &null]));
+    }
 
     /// The two- and three-argument shape test read in place accepts
     /// exactly what `frameless_args` accepts, for every class.
@@ -3063,12 +3197,59 @@ mod tests {
         assert!(ok(fl::STR_REPLACE, &[s("ab"), s("cd"), s("xabx")]));
         assert!(!ok(fl::STR_REPLACE, &[s("a"), s("cd"), s("xax")]));
         assert!(!ok(fl::STR_REPLACE, &[s("a"), s("b"), arr(vec![])]));
+        let strs = |v: &[&str]| arr(v.iter().map(|x| Value::Str(ZStr::from(*x))).collect());
+        assert!(ok(fl::STR_REPLACE, &[strs(&["`", "\""]), s(""), s("a`b")]));
+        assert!(ok(
+            fl::STR_REPLACE,
+            &[strs(&["ab", "cd"]), s("x"), s("abcd")]
+        ));
+        assert!(!ok(
+            fl::STR_REPLACE,
+            &[strs(&["a", "cd"]), s("xy"), s("acd")]
+        ));
+        assert!(!ok(
+            fl::STR_REPLACE,
+            &[arr(vec![Value::Int(1)]), s(""), s("1")]
+        ));
         // max()/min() of two scalars; strtr() of three strings.
         assert!(ok(fl::MIN_MAX, &[i(1), s("x")]));
         assert!(!ok(fl::MIN_MAX, &[i(1), arr(vec![])]));
         assert!(!ok(fl::MIN_MAX, &[i(1), i(2), i(3)]));
         assert!(ok(fl::STRTR, &[s("abc"), s("a"), s("b")]));
-        assert!(!ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        // strtr(string, array) of scalar replacements (an array value
+        // warns: "Array to string conversion").
+        assert!(ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        let pairs = |vals: Vec<Value>| {
+            let mut t = php_runtime::HashTable::new();
+            for (k, v) in [b"a", b"b"].iter().zip(vals) {
+                let _ = t.insert(ZStr::from(&k[..]), v);
+            }
+            Some(Value::Array(php_runtime::ZArray::from_table(t)))
+        };
+        assert!(ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                pairs(vec![Value::Str(ZStr::from("x")), Value::Int(1)])
+            ]
+        ));
+        assert!(!ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                pairs(vec![Value::Array(php_runtime::ZArray::new())])
+            ]
+        ));
+        // An empty key warns.
+        let mut t = php_runtime::HashTable::new();
+        let _ = t.insert(ZStr::from(""), Value::Int(1));
+        assert!(!ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                Some(Value::Array(php_runtime::ZArray::from_table(t)))
+            ]
+        ));
         // Math: ints are widened silently; log() bases, round() modes and
         // intdiv() by zero or overflowing can fail.
         let f = |x: f64| Some(Value::Float(x));

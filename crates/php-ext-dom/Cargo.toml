@@ -17,6 +17,7 @@ php-streams = { path = "../php-streams" }
 php-ext-xsl = { path = "../php-ext-xsl" }
 php-xsl = { path = "../php-xsl" }
 php-memlimit = { path = "../php-memlimit" }
+rustc-hash = "2"
 
 [lints]
 workspace = true

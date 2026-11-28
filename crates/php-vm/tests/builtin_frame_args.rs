@@ -143,3 +143,496 @@ ABCabc
 "#
     );
 }
+
+/// Unqualified builtin calls from namespaced code (`ZEND_INIT_NS_FCALL_BY_NAME`
+/// resolved to the global function) take the frameless and fast-evaluated
+/// forms as a qualified call does (php-src's `ZEND_JMP_FRAMELESS`); the
+/// calls that can report keep their frame (traces name the builtin), and
+/// a namespaced function defined later replaces the global one where the
+/// site had not resolved it yet. Expected output: php-src's (PHP 8.5).
+#[test]
+fn namespaced_builtin_calls_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function run() {
+  $a = ['k' => 1, 'z' => null]; $s = "hello world"; $r = [];
+  for ($i = 0; $i < 3; $i++) {
+    $r[] = array_key_exists('k', $a); $r[] = array_key_exists('z', $a); $r[] = array_key_exists('q', $a);
+    $r[] = in_array(1, $a); $r[] = in_array('1', $a, true); $r[] = str_contains($s, 'wor'); $r[] = str_starts_with($s, 'he');
+    $r[] = strlen($s); $r[] = is_string($s); $r[] = is_array($a); $r[] = count($a); $r[] = get_class(new \stdClass);
+    $r[] = strpos($s, 'o'); $r[] = substr($s, 2, 3); $r[] = str_replace('l', 'L', $s); $r[] = implode(',', [1, 2]);
+    $r[] = trim("  x "); $r[] = min(3, 1); $r[] = max([4, 9]); $r[] = dirname('/a/b/c'); $r[] = strtolower('AbC');
+  }
+  echo json_encode($r), "\n";
+}
+run();
+function errs() {
+  foreach ([fn() => strlen([]), fn() => array_key_exists([], []), fn() => in_array(1, 'x'), fn() => str_contains([], 'a'), fn() => substr('abc', 'x')] as $f) {
+    try { $f(); } catch (\TypeError $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'] ?? '-', "\n"; }
+  }
+
+  try { strpos('abc', 'b', 10); } catch (\ValueError $e) { echo $e->getMessage(), " @", $e->getTrace()[0]['function'], "\n"; }
+  set_error_handler(function ($no, $msg, $f, $l) { echo "handler: $msg line $l\n"; return true; });
+  $u = [1]; $x = array_key_exists(1.5, $u); var_dump($x);
+  restore_error_handler();
+}
+errs();
+function shadow() { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = strlen('abcd'); if ($i == 0) { eval('namespace App; function strlen($s) { return "mine"; }'); } } echo json_encode($r), "\n"; }
+shadow();
+function strict_ints() { $r = []; for ($i = 0; $i < 2; $i++) { $r[] = strlen(12345); $r[] = str_repeat('a', '3'); } echo json_encode($r), "\n"; }
+strict_ints();
+"#).1,
+        r#"[true,true,false,true,false,true,true,11,true,true,2,"stdClass",4,"llo","heLLo worLd","1,2","x",1,9,"\/a\/b","abc",true,true,false,true,false,true,true,11,true,true,2,"stdClass",4,"llo","heLLo worLd","1,2","x",1,9,"\/a\/b","abc",true,true,false,true,false,true,true,11,true,true,2,"stdClass",4,"llo","heLLo worLd","1,2","x",1,9,"\/a\/b","abc"]
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given @strlen
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type @array_key_exists
+TypeError: in_array(): Argument #2 ($haystack) must be of type array, string given @in_array
+TypeError: str_contains(): Argument #1 ($haystack) must be of type string, array given @str_contains
+TypeError: substr(): Argument #2 ($offset) must be of type int, string given @substr
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack) @strpos
+handler: Implicit conversion from float 1.5 to int loses precision line 22
+bool(false)
+[4,4,4]
+["mine","aaa","mine","aaa"]
+"#
+    );
+}
+
+/// Leaf builtins (`assert()`, `method_exists()`, `class_exists()`,
+/// `defined()`, `explode()`, ...) whose arguments are computed after the
+/// call starts run without a frame when nothing can see that; failing
+/// assertions, errors and autoloading as before. Expected output:
+/// php-src's (PHP 8.5), with master's `explode()` message.
+#[test]
+fn leaf_builtins_with_computed_arguments_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+interface I {} class A implements I { function m() {} use T; } trait T { function t() {} } class B extends A {}
+function run() {
+  $o = new B; $r = [];
+  for ($i = 0; $i < 3; $i++) {
+    assert($o instanceof A); assert($o instanceof I, 'with message');
+    $r[] = method_exists($o, 'm'); $r[] = method_exists($o, strtolower('T')); $r[] = method_exists(get_class($o), 'nope');
+    $r[] = method_exists('App\B', 'm'); $r[] = class_exists('App\\' . 'A'); $r[] = class_exists('App\Nope' . $i, false);
+    $r[] = defined('PHP_' . 'EOL'); $r[] = implode(',', array_keys(class_implements($o)));
+    $r[] = explode(',', 'a,b' . $i);
+    $r[] = array_values(array_filter([1, 0, 2])); $r[] = ucfirst(strtolower('XY')); $r[] = array_merge([1], [$i]);
+  }
+  echo json_encode($r), "\n";
+}
+run();
+function failing() {
+  ini_set('zend.assertions', 1);
+  try { assert(1 > 2, 'custom'); } catch (\AssertionError $e) { echo "AE: ", $e->getMessage(), " @", $e->getTrace()[0]['function'] ?? '-', "\n"; }
+  try { assert(strlen('x') > 5); } catch (\AssertionError $e) { echo "AE: ", $e->getMessage(), "\n"; }
+  try { explode('' . '', 'abc'); } catch (\ValueError $e) { echo $e->getMessage(), " @", $e->getTrace()[0]['function'], "\n"; }
+  try { method_exists(123 + 0, 'x'); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+  spl_autoload_register(function ($c) { echo "autoload($c) "; });
+  var_dump(class_exists('App\Auto' . 'X')); var_dump(method_exists('App\Auto' . 'Y', 'm'));
+}
+try { failing(); } catch (\ValueError $e) { echo "VE: ", $e->getMessage(), "\n"; }
+"#).1,
+        r#"[true,true,false,true,true,false,true,"App\\I",["a","b0"],[1,2],"Xy",[1,0],true,true,false,true,true,false,true,"App\\I",["a","b1"],[1,2],"Xy",[1,1],true,true,false,true,true,false,true,"App\\I",["a","b2"],[1,2],"Xy",[1,2]]
+AE: custom @assert
+AE: assert(strlen('x') > 5)
+explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters @explode
+method_exists(): Argument #1 ($object_or_class) must be of type object|string, int given
+autoload(App\AutoX) bool(false)
+autoload(App\AutoY) bool(false)
+"#
+    );
+}
+
+/// `is_callable($object)` runs without a frame (`special::leaf::IS_CALLABLE`):
+/// closures, `__invoke()` (inherited, private: in and out of its class's
+/// scope), `__call()`, internal objects; names and arrays keep the framed
+/// call (autoloading). Expected output: php-src's (PHP 8.5).
+#[test]
+fn is_callable_of_objects_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class Inv { public function __invoke() {} }
+class PrivInv { private function __invoke() {} function test() { return [is_callable($this), is_callable(new self)]; } }
+class Plain { public function __call($n, $a) {} public static function __callStatic($n, $a) {} }
+class ChildInv extends Inv {}
+function run() {
+  $r = [];
+  $objs = [function () {}, fn() => 1, new Inv, new ChildInv, new Plain, new \stdClass, new \ArrayObject([]), \Closure::fromCallable('strlen'), (new \ReflectionClass(Inv::class))->newInstanceWithoutConstructor()];
+  for ($i = 0; $i < 2; $i++) { foreach ($objs as $o) { $r[] = is_callable($o) ? 1 : 0; } }
+  $r[] = implode(',', array_map(fn($b) => $b ? 1 : 0, (new PrivInv)->test()));
+  $r[] = is_callable(new PrivInv) ? 1 : 0;
+  echo implode(' ', $r), "\n";
+  var_dump(is_callable('strlen'), is_callable('nope'), is_callable([new Inv, '__invoke']), is_callable('App\Inv::nope'));
+  spl_autoload_register(function ($c) { echo "autoload($c) "; });
+  var_dump(is_callable('Missing::f'), is_callable(['Missing2', 'f']));
+}
+run();
+"#).1,
+        r"
+Warning: The magic method App\PrivInv::__invoke() must have public visibility in t.php on line 4
+1 1 1 1 0 0 0 1 1 1 1 1 1 0 0 0 1 1 1,1 1
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+autoload(Missing) autoload(Missing2) bool(false)
+bool(false)
+"
+    );
+}
+
+/// Globals looked up by name (`isset($GLOBALS[$n])`,
+/// `array_key_exists($n, $GLOBALS)`, `$GLOBALS[$n] ?? d`) while the main
+/// frame is the newest of the global scope read its variables and the
+/// global table without bringing the table up to date first: variables
+/// of the main script (null, references), globals written through
+/// `$GLOBALS` and `global`, unset ones, `eval`, variable
+/// variables, a function's own variables. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn global_lookups_by_name_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$wgA = 1; $wgN = null; $ref = 5; $wgR = &$ref;
+function chk(...$names) { $o = []; foreach ($names as $n) { $o[] = $n . '=' . (isset($GLOBALS[$n]) ? 1 : 0) . (array_key_exists($n, $GLOBALS) ? 'k' : '-') . (is_scalar($GLOBALS[$n] ?? 'd') ? var_export($GLOBALS[$n] ?? 'd', true) : gettype($GLOBALS[$n])); } return implode(' ', $o); }
+echo chk('wgA', 'wgN', 'wgR', 'wgB', 'GLOBALS', 'nope'), "\n";
+$GLOBALS['wgB'] = 2; echo chk('wgB'), "\n";
+function setg() { global $wgC; $wgC = 3; $GLOBALS['wgA'] = 10; } setg(); echo chk('wgA', 'wgC'), " ", $wgA, "\n";
+$wgA = 20; echo chk('wgA'), "\n";
+unset($wgA); echo chk('wgA'), "\n";
+$ref = 7; echo chk('wgR'), "\n";
+eval('$wgEv = 4; echo chk("wgEv"), "\n";'); echo chk('wgEv'), "\n";
+for ($i = 0; $i < 3; $i++) { $k = "wgLoop$i"; $$k = $i; echo chk($k), " "; } echo "\n";
+echo count(array_filter(array_keys(get_defined_vars()), fn($k) => str_starts_with($k, 'wg'))), "\n";
+function local() { $wgLocal = 1; return chk('wgLocal'); } echo local(), "\n";
+"#).1,
+        r"wgA=1k1 wgN=0k'd' wgR=1k5 wgB=0-'d' GLOBALS=0-'d' nope=0-'d'
+wgB=1k2
+wgA=1k10 wgC=1k3 10
+wgA=1k20
+wgA=0-'d'
+wgR=1k7
+wgEv=1k4
+wgEv=1k4
+wgLoop0=1k0 wgLoop1=1k1 wgLoop2=1k2 
+8
+wgLocal=0-'d'
+"
+    );
+}
+
+/// Globals looked up by name while a top-level `eval` (or include) is the
+/// newest frame of the global scope: its own variables first, the table
+/// for the others and for its undefined ones (as `sync_cvs_to_symtab`
+/// leaves them), globals written from functions, `unset()`, nested
+/// `eval`, variable variables, references. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn global_lookups_under_a_top_level_eval_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$wgA = 1; $wgB = 2;
+function chk(...$names) { $o = []; foreach ($names as $n) { $o[] = $n . '=' . (isset($GLOBALS[$n]) ? 1 : 0) . (array_key_exists($n, $GLOBALS) ? 'k' : '-') . var_export($GLOBALS[$n] ?? 'd', true); } return implode(' ', $o); }
+function setg() { global $wgC; $wgC = 3; $GLOBALS['wgA'] = 10; }
+$code = <<<'PHP'
+$wgInc = 1; $wgInc2 = null; echo chk('wgInc', 'wgInc2', 'wgB', 'wgA'), "\n";
+setg(); echo chk('wgA', 'wgC', 'wgInc'), " ", $wgA ?? 'u', "\n";
+$wgB = 99; echo chk('wgB'), "\n";
+unset($wgInc); echo chk('wgInc'), "\n";
+function inner() { $GLOBALS['wgNew'] = 'n'; return chk('wgNew', 'wgB'); } echo inner(), " ", $wgNew ?? 'u', "\n";
+eval('$wgEv2 = 5; echo chk("wgEv2", "wgB"), "\n";'); echo chk('wgEv2'), "\n";
+$k = 'wgDyn'; $$k = 'd'; echo chk('wgDyn'), "\n";
+$wgRef = &$wgB; $wgB = 100; echo chk('wgRef', 'wgB'), "\n";
+PHP;
+eval($code);
+echo chk('wgInc', 'wgB', 'wgNew', 'wgDyn', 'wgA'), "\n";
+"#).1,
+        r"wgInc=1k1 wgInc2=0k'd' wgB=1k2 wgA=1k1
+wgA=1k10 wgC=1k3 wgInc=1k1 10
+wgB=1k99
+wgInc=0-'d'
+wgNew=1k'n' wgB=1k99 n
+wgEv2=1k5 wgB=1k99
+wgEv2=1k5
+wgDyn=1k'd'
+wgRef=1k100 wgB=1k100
+wgInc=0-'d' wgB=1k100 wgNew=1k'n' wgDyn=1k'd' wgA=1k10
+"
+    );
+}
+
+/// `instanceof self`, `instanceof static` and `instanceof parent` on the
+/// tape (`hot::instanceof_in`): a non-object is `false` without looking at
+/// the class (as `ZEND_INSTANCEOF` fetches it only for an object), an
+/// object is tested against the frame's scope, called class or parent;
+/// also through a reference, from static methods, and a class never
+/// loaded. Expected output: php-src's (PHP 8.5).
+#[test]
+fn instanceof_of_relative_classes_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+class A { function t($x) { return [$x instanceof self, $x instanceof static, $x instanceof A]; }
+  static function s($x) { return [$x instanceof self, $x instanceof static]; } }
+class B extends A { function p($x) { return [$x instanceof parent, $x instanceof self, $x instanceof static]; } }
+$cases = ['str', 1, null, [], new A, new B, new stdClass, 1.5, true];
+for ($i = 0; $i < 2; $i++) {
+  foreach ($cases as $c) { echo json_encode([(new A)->t($c), (new B)->t($c), (new B)->p($c), A::s($c), B::s($c)]), "\n"; }
+}
+function f($x) { return $x instanceof Missing; } var_dump(f('a'), f(new A));
+$r = &$cases[4]; foreach ([$r, 'x'] as $v) { var_dump((new B)->t($v)); }
+"#).1,
+        r"[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[true,true,true],[true,false,true],[true,false,false],[true,true],[true,false]]
+[[true,true,true],[true,true,true],[true,true,true],[true,true],[true,true]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[true,true,true],[true,false,true],[true,false,false],[true,true],[true,false]]
+[[true,true,true],[true,true,true],[true,true,true],[true,true],[true,true]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+bool(false)
+bool(false)
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(false)
+}
+"
+    );
+}
+
+/// `strtr(string, array)` runs frameless when it reports nothing (scalar
+/// replacements, no empty key); an empty key's warning (with its
+/// `strtr(): ` prefix), an array replacement's conversion warning and an
+/// object's `__toString()` take the framed call. Expected output:
+/// php-src's (PHP 8.5).
+#[test]
+fn strtr_with_an_array_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function run() {
+  $r = [];
+  for ($i = 0; $i < 2; $i++) {
+    $r[] = strtr('wiki?hdb??x', ['?h' => '-', '??' => '?']);
+    $r[] = strtr('abc', []); $r[] = strtr('', ['a' => 'b']); $r[] = strtr('aaa', ['a' => 'b', 'aa' => 'c']);
+    $r[] = strtr('123', [1 => 'one', 2 => 2.5, 3 => true, 'x' => null]);
+    $r[] = strtr('ab', ['' => 'E', 'a' => false]);
+    $r[] = strtr('hi all', ['hi' => 'bye', 'all' => 'everyone', 'h' => 'X']);
+  }
+  echo json_encode($r), "\n";
+  echo strtr('abc', ['a' => [1]]), "\n";
+  echo strtr('abc', ['a' => new class { function __toString() { return 'O'; } }]), "\n";
+  echo strtr('abc', 'ab', 'xy'), "\n";
+}
+run();
+"#).1,
+        r#"
+Warning: strtr(): Ignoring replacement of empty string in t.php on line 9
+
+Warning: strtr(): Ignoring replacement of empty string in t.php on line 9
+["wiki-db?x","abc","","cb","one2.51","b","bye everyone","wiki-db?x","abc","","cb","one2.51","b","bye everyone"]
+
+Warning: Array to string conversion in t.php on line 13
+Arraybc
+Obc
+xyc
+"#
+    );
+}
+
+/// `str_replace(array, string, string)` runs frameless when every search
+/// element is a string no shorter than the replacement; growing
+/// replacements, a count by reference, non-string elements (converted,
+/// with their warning) take the framed call. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn str_replace_with_an_array_of_searches_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function run() {
+  $r = [];
+  for ($i = 0; $i < 2; $i++) {
+    $r[] = str_replace(['`', '"', '[', ']'], '', '`a`."b"[c]');
+    $r[] = str_replace(['ab', 'cd'], 'x', 'abcdab'); $r[] = str_replace([], '', 'abc'); $r[] = str_replace(['', 'a'], '', 'banana');
+    $r[] = str_replace(['a', 'cd'], 'xy', 'acd'); $r[] = str_replace('"', '""', 'say "hi"');
+    $n = 0; $r[] = str_replace(['a'], '', 'aaa', $n); $r[] = $n;
+  }
+  echo json_encode($r), "\n";
+  echo str_replace([1, 2], '', '123'), "\n";
+  echo str_replace([[1]], '', 'abc'), "\n";
+}
+run();
+"#).1,
+        r#"["a.bc","xxx","abc","bnn","xyxy","say \"\"hi\"\"","",3,"a.bc","xxx","abc","bnn","xyxy","say \"\"hi\"\"","",3]
+3
+
+Warning: Array to string conversion in t.php on line 13
+abc
+"#
+    );
+}
+
+/// `$s . null` on the tape: null is the empty string (no diagnostic) and
+/// the result is the string itself, as `concat_function` makes it; null on
+/// the left, both null, `.=`, chains, and a string written to after it
+/// was concatenated (copy on write). Expected output: php-src's (PHP 8.5).
+#[test]
+fn concatenation_with_null_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+function f($a, $b) { return $a . $b; } function g($a) { return 'x' . $a . 'y'; } function h($a, $b) { $t = $a . ''; return $t . $b; }
+for ($i = 0; $i < 2; $i++) {
+  var_dump(f('s', null), f(null, 's'), f(null, null), f('', null), g(null), h('ab', null), f('s', 1), f('s', 1.5), f('s', true), f('s', false));
+  $n = null; $s = 'pre'; $s .= $n; var_dump($s); $u = 'q' . $n . $n; var_dump($u);
+  $str = str_repeat('z', 3); $c = $str . null; $str[0] = 'Q'; var_dump($c, $str);
+}
+"#).1,
+        r#"string(1) "s"
+string(1) "s"
+string(0) ""
+string(0) ""
+string(2) "xy"
+string(2) "ab"
+string(2) "s1"
+string(4) "s1.5"
+string(2) "s1"
+string(1) "s"
+string(3) "pre"
+string(1) "q"
+string(3) "zzz"
+string(3) "Qzz"
+string(1) "s"
+string(1) "s"
+string(0) ""
+string(0) ""
+string(2) "xy"
+string(2) "ab"
+string(2) "s1"
+string(4) "s1.5"
+string(2) "s1"
+string(1) "s"
+string(3) "pre"
+string(1) "q"
+string(3) "zzz"
+string(3) "Qzz"
+"#
+    );
+}
+
+/// `array_map()` over a list with holes keeps its keys (the results are
+/// appended while the keys run on without a gap), and a builtin's
+/// callback takes the direct call only for a plain declaration: typed
+/// parameters checked (a `TypeError`), by-reference and variadic
+/// parameters, a generator and a reference argument the generic call.
+/// Expected output from `/usr/bin/php8.5`.
+#[test]
+fn array_callbacks_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$a = [1, 2, 3, 4]; unset($a[1]);
+var_dump(array_map(fn($v) => $v * 10, $a));
+$b = [5, 6]; $b[] = 7; unset($b[2]); $b[] = 8;
+var_dump(array_map(fn($v) => $v + 1, $b));
+var_dump(array_map(fn(int $v): string => "s$v", [1, 2]));
+try { array_map(fn(int $v) => $v, ['x']); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+function byref(&$v) { $v++; return $v; }
+var_dump(array_map('byref', [1, 2]));
+function vari(...$v) { return count($v); }
+var_dump(array_map('vari', [1, 2]));
+function gen($v) { yield $v; }
+var_dump(array_map(fn($g) => get_class($g), array_map('gen', [1])));
+$x = 3; $r = &$x; $arr = [&$r, 4];
+var_dump(array_map(fn($v) => $v * 2, $arr));
+usort($arr, function (int $p, int $q) { return $p <=> $q; }); var_dump($arr);
+var_dump(array_filter([1, 0, 2, null, 3]));
+"#).1,
+        r#"array(3) {
+  [0]=>
+  int(10)
+  [2]=>
+  int(30)
+  [3]=>
+  int(40)
+}
+array(3) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(7)
+  [3]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  string(2) "s1"
+  [1]=>
+  string(2) "s2"
+}
+TypeError: {closure:t.php:7}(): Argument #1 ($v) must be of type int, string given
+
+Warning: byref(): Argument #1 ($v) must be passed by reference, value given in t.php on line 9
+
+Warning: byref(): Argument #1 ($v) must be passed by reference, value given in t.php on line 9
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+}
+array(1) {
+  [0]=>
+  string(9) "Generator"
+}
+array(2) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(8)
+}
+array(2) {
+  [0]=>
+  &int(3)
+  [1]=>
+  int(4)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(2)
+  [4]=>
+  int(3)
+}
+"#
+    );
+}

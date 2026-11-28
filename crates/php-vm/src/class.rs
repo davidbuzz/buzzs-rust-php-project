@@ -86,6 +86,38 @@ pub struct AttributeInfo {
     /// The arguments as they are written, when the attribute was compiled
     /// from source in this process ([`AttributeSource`]).
     pub source: Option<Rc<AttributeSource>>,
+    /// The class `name` was found to be in this request
+    /// ([`AttrClassCache`]).
+    pub class_cache: AttrClassCache,
+}
+
+/// The class an attribute's name was last found to name, and the request
+/// it was found in (`classlink::request_epoch`): within one request a
+/// name that names a class names it for good (no class leaves the class
+/// table, an alias takes no taken name), so `getAttributes($class,
+/// IS_INSTANCEOF)` looks each attribute's class up once a request, where a
+/// lookup by name of each, on every call, was 2.2 million class lookups
+/// in a framework application's unit tests. Held weakly; a miss is not
+/// kept (autoloading may declare the class later). Cloned along.
+#[derive(Clone, Debug, Default)]
+pub struct AttrClassCache(std::cell::RefCell<Option<(u64, std::rc::Weak<Class>)>>);
+
+impl AttrClassCache {
+    /// The class found in request `epoch`, if it still is.
+    pub(crate) fn get(&self, epoch: u64) -> Option<Rc<Class>> {
+        let slot = self.0.try_borrow().ok()?;
+        match slot.as_ref() {
+            Some((e, w)) if *e == epoch => w.upgrade(),
+            _ => None,
+        }
+    }
+
+    /// Records `c` as found in request `epoch`.
+    pub(crate) fn set(&self, epoch: u64, c: &Rc<Class>) {
+        if let Ok(mut slot) = self.0.try_borrow_mut() {
+            *slot = Some((epoch, Rc::downgrade(c)));
+        }
+    }
 }
 
 /// The arguments of an attribute as they are written, kept from compilation
@@ -663,11 +695,26 @@ impl Class {
 
     /// Finds a method by (any case) name.
     pub fn find_method(&self, name: &[u8]) -> Option<&Rc<Method>> {
-        if let Some(m) = self.methods.get(name) {
-            return Some(m);
+        // The table is keyed by lower-case names: a name without capitals
+        // is one lookup. One with capitals (`getName`, most method names
+        // as written) was looked up as it is, missed, and was lower-cased
+        // into a new allocation for a second lookup: it is lower-cased on
+        // the stack and looked up once (the name as written only after a
+        // miss).
+        if !name.iter().any(u8::is_ascii_uppercase) {
+            return self.methods.get(name);
         }
-        let lc = name.to_ascii_lowercase();
-        self.methods.get(lc.as_slice())
+        let mut buf = [0u8; 64];
+        let found = match buf.get_mut(..name.len()) {
+            Some(dst) => {
+                for (d, s) in dst.iter_mut().zip(name) {
+                    *d = s.to_ascii_lowercase();
+                }
+                self.methods.get(&*dst)
+            }
+            None => self.methods.get(name.to_ascii_lowercase().as_slice()),
+        };
+        found.or_else(|| self.methods.get(name))
     }
 
     /// Finds a constant.

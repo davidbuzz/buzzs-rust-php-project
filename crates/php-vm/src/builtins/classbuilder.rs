@@ -219,6 +219,7 @@ impl ClassBuilder {
             line: 0,
             strict: false,
             source: None,
+            class_cache: crate::class::AttrClassCache::default(),
         };
         self.consts
             .push((ZStr::from(name), v, flags::PUBLIC, vec![attr]));

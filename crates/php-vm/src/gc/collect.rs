@@ -152,7 +152,7 @@ impl Vm {
     fn root_live_temporaries(&self) {
         use crate::vm::ForeachIter;
         for f in &self.frames {
-            for v in &f.tmps {
+            for v in f.slots.tmps() {
                 super::root_live_value(v);
             }
             for it in f.iters.iter().flatten() {

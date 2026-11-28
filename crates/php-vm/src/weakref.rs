@@ -74,13 +74,6 @@ pub(crate) fn reset() {
     MAPS.with(|m| m.borrow_mut().clear());
 }
 
-/// Whether a weak reference or a weak map entry exists (or may: the
-/// flag cannot be read): an object's death is then somebody's business.
-#[inline]
-pub(crate) fn is_active() -> bool {
-    ACTIVE.try_with(Cell::get).unwrap_or(true)
-}
-
 /// Called by the engine when an object is freed (`zend_weakrefs_notify`):
 /// drops the `WeakMap` entries keyed by it (releasing their values) and its
 /// `WeakReference` registration. Must run before the handle is recycled.
@@ -223,6 +216,7 @@ fn weakref_create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         weakref: Rc::downgrade(wr.rc()),
     };
     object::set_internal(&wr, WeakRefData { referent });
+    object::mark_weakly_referenced(&target);
     activate();
     // The replaced slot (a stale registration) is dropped outside the borrow.
     let old = REFS.with(|r| r.borrow_mut().insert(handle, slot));
@@ -478,6 +472,7 @@ fn map_write_dimension(vm: &mut Vm, o: &Obj, key: Option<&Value>, value: &Value)
         st.set(&key, value.clone())
     };
     if inserted {
+        object::mark_weakly_referenced(&key);
         register_map_key(key.handle(), &map);
     }
     // Released after the borrow: the old value's destructor may touch the map.

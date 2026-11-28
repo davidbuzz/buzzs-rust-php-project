@@ -1,0 +1,472 @@
+diff --git a/crates/php-vm/src/exec/tape.rs b/crates/php-vm/src/exec/tape.rs
+index 9dbf6129..4a9879f0 100644
+--- a/crates/php-vm/src/exec/tape.rs
++++ b/crates/php-vm/src/exec/tape.rs
+@@ -2528,6 +2528,95 @@ unsafe fn take_up(vm: &mut Vm) -> Option<(*const OpArray, *mut Frame, *const Ins
+     Some((code, std::ptr::from_mut(f), base, p))
+ }
+ 
++/// [`light_run`]: no light frame was made (nothing changed).
++pub(super) const LIGHT_NONE: usize = usize::MAX;
++/// [`light_run`]: the light frame became the real frame on top, which the
++/// frame loop takes up from its resume point.
++const LIGHT_FRAME: usize = usize::MAX - 1;
++
++/// The planned call of site `site` of `code` (the current frame's) made on
++/// a light frame (`calls::light_call`) and run to its return on a core of
++/// its own, which takes the callee's slots at fixed offsets of the VM's
++/// light slot block: no frame is readied, pushed, released or popped.
++/// Returns the caller's op after the call (its resume point, stored),
++/// [`LIGHT_FRAME`] when the callee stopped at something a light frame
++/// cannot run and its real frame was made (`calls::light_materialize`),
++/// or [`LIGHT_NONE`] when the call is not one for a light frame.
++///
++/// Called by `calls::call_plain`, which reports the call as entered: the
++/// tape then takes up the current frame (the caller, at its stored resume
++/// point after the call, or the real frame made). Out of line, with its own
++/// copy of [`run_core`]: [`run_tape`] is not changed at all (a test of the
++/// light call in its loop cost every other planned call ~20 instructions
++/// of register shuffling).
++///
++/// # Safety
++/// No light frame is running (they never nest: a leaf makes no call).
++#[inline(never)]
++pub(super) unsafe fn light_run(vm: &mut Vm, code: &OpArray, site: usize) -> usize {
++    if crate::interrupt::safe_point_due() {
++        return LIGHT_NONE;
++    }
++    let slots: *mut Value = vm.light_slots.as_mut_ptr().cast();
++    // SAFETY: the slots are free.
++    let Some(lp) = (unsafe { calls::light_call(vm, code, site, slots) }) else {
++        return LIGHT_NONE;
++    };
++    // SAFETY: the plan lives with the caller's op array.
++    let plan: &calls::Plan = unsafe { &*lp };
++    let (lcode, ltape, lits, ncv, _) = plan.leaf_parts();
++    let Some(f) = vm.frames.last_mut() else {
++        return LIGHT_NONE;
++    };
++    let st = St {
++        cvs: slots.cast(),
++        // SAFETY: within the light slots (`ncv + ntmp` fit).
++        tmps: unsafe { slots.add(ncv as usize) }.cast(),
++        lits,
++        // (Not read by the instructions a leaf has: `leaf_safe`.)
++        f: std::ptr::from_mut(f),
++    };
++    // SAFETY: the callee's tape, from its first op; the light slots are
++    // sized for its code.
++    let out = unsafe { run_core::<false>(st, std::ptr::null(), ltape.add(plan.first_op())) };
++    // SAFETY: both point into the callee's tape.
++    #[allow(clippy::cast_sign_loss)]
++    let at = unsafe { out.ip.offset_from(ltape) } as usize;
++    // SAFETY: the callee's op array, held by its function.
++    let lc: &OpArray = unsafe { &*lcode };
++    if out.why == WHY_EXIT {
++        if let Some(&Op::Return { val }) = lc.ops.get(at) {
++            // SAFETY: the light frame's slots.
++            if unsafe { calls::light_return(vm, plan, slots, val) } {
++                return plan.done();
++            }
++        }
++    }
++    // SAFETY: as above.
++    unsafe { calls::light_materialize(vm, plan, slots, at) };
++    LIGHT_FRAME
++}
++
++/// Whether the instruction `inst` of op `op` may run on a light frame
++/// (`calls::light_call`): it needs neither the frame (`St::f`) nor the VM,
++/// and runs no user code: the numeric core instructions, jumps, and the
++/// return.
++pub(super) fn leaf_safe(inst: &Inst, op: &Op) -> bool {
++    match inst.op {
++        TOp::Exit => matches!(op, Op::Return { .. }),
++        TOp::Jmp
++        | TOp::JmpZT
++        | TOp::JmpNzT
++        | TOp::IncC
++        | TOp::DecC
++        | TOp::PreIncT
++        | TOp::PreDecT
++        | TOp::PostIncT
++        | TOp::PostDecT => true,
++        o => o.jit_meta().is_some(),
++    }
++}
++
+ /// Whether the current frame's newest pending call is of a builtin.
+ #[inline]
+ fn pending_builtin(vm: &Vm) -> bool {
+diff --git a/crates/php-vm/src/exec/tape/calls.rs b/crates/php-vm/src/exec/tape/calls.rs
+index 8332a48e..59e89fca 100644
+--- a/crates/php-vm/src/exec/tape/calls.rs
++++ b/crates/php-vm/src/exec/tape/calls.rs
+@@ -469,6 +469,12 @@ pub(super) struct Plan {
+     dst: Option<u32>,
+     /// The callee's first op after the `RECV`s of the passed arguments.
+     first_op: usize,
++    /// Whether the callee runs on a light frame ([`light_call`]): 0 not
++    /// looked at yet, 1 yes, 2 no.
++    leaf: std::cell::Cell<u8>,
++    /// For a leaf callee: its tape instruction at `first_op`, its
++    /// literals, and its compiled variables and temporaries.
++    leaf_at: std::cell::Cell<(*const OpArray, *const super::Inst, *const u8, u32, u32)>,
+     /// The caller's op after the `DoCall`.
+     done: usize,
+     /// A method's or a relative static call's: the address of the class
+@@ -678,6 +684,8 @@ fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>
+         idx,
+         dst,
+         first_op: 0,
++        leaf: std::cell::Cell::new(0),
++        leaf_at: std::cell::Cell::new((std::ptr::null(), std::ptr::null(), std::ptr::null(), 0, 0)),
+         done: at + n + 2,
+         class_addr: 0,
+         scope_addr: 0,
+@@ -974,6 +982,14 @@ pub(super) fn call_plain(vm: &mut Vm, code: &OpArray, at: usize, site: usize) ->
+     let Some(Some(plan)) = plan_slot(code, site).and_then(std::cell::OnceCell::get) else {
+         return false;
+     };
++    // A leaf callee runs on a light frame to its return
++    // (`super::light_run`); the call counts as entered: the tape takes up
++    // the current frame, the caller after the call (or the real frame made
++    // for what the light frame could not run).
++    // SAFETY: no light frame runs (a leaf makes no call).
++    if plan.leaf.get() != 2 && unsafe { super::light_run(vm, code, site) } != super::LIGHT_NONE {
++        return true;
++    }
+     if plan.fetches {
+         return call_plain_fetching(vm, code, at, plan);
+     }
+@@ -6398,3 +6414,300 @@ pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> boo
+     });
+     true
+ }
++
++/// The slots of the light frame ([`light_call`]): `run_tape`'s own buffer.
++pub(crate) const LIGHT_SLOTS: usize = 64;
++
++impl Plan {
++    /// A leaf callee's op array, tape, literals, and numbers of compiled
++    /// variables and temporaries ([`light_call`]).
++    #[inline(always)]
++    #[allow(clippy::inline_always)] // a few loads
++    pub(super) fn leaf_parts(&self) -> (*const OpArray, *const super::Inst, *const u8, u32, u32) {
++        self.leaf_at.get()
++    }
++
++    /// The callee's first op (after the `RECV`s of the passed arguments).
++    pub(super) fn first_op(&self) -> usize {
++        self.first_op
++    }
++
++    /// The caller's op after the call.
++    pub(super) fn done(&self) -> usize {
++        self.done
++    }
++}
++
++/// Whether the callee of `plan` is a leaf: its tape from the first op on
++/// has only instructions that need neither the frame nor the VM (the
++/// numeric core instructions, jumps) and returns, so that it can run on a
++/// light frame from its call to its return. Worked out once.
++#[cold]
++#[inline(never)]
++fn leaf_of(plan: &Plan) -> bool {
++    let ok = (|| {
++        let uf = plan.uf.upgrade()?;
++        let code: &OpArray = &uf.code;
++        let tape = code.tape.get(code);
++        if !code
++            .tape
++            .jit_cnt
++            .load(std::sync::atomic::Ordering::Relaxed)
++            .is_null()
++            || code.cv_names.len() + code.num_tmps as usize > LIGHT_SLOTS
++            || uf.return_type.is_some()
++            || code.num_iters != 0
++            || code.num_finally != 0
++        {
++            return None;
++        }
++        for i in plan.first_op..code.ops.len() {
++            if !super::leaf_safe(tape.get(i)?, code.ops.get(i)?) {
++                return None;
++            }
++        }
++        #[allow(clippy::cast_possible_truncation)] // at most `LIGHT_SLOTS`
++        plan.leaf_at.set((
++            std::ptr::from_ref(code),
++            tape.as_ptr(),
++            code.literals.as_ptr().cast(),
++            code.cv_names.len() as u32,
++            code.num_tmps,
++        ));
++        Some(())
++    })()
++    .is_some();
++    plan.leaf.set(if ok { 1 } else { 2 });
++    ok
++}
++
++/// The planned call of the site at `at` of `code` (the current frame's)
++/// made on a light frame: the callee's compiled variables and temporaries
++/// in `slots` (`run_tape`'s buffer: variables first, then temporaries), its
++/// arguments copied or moved there, and nothing else readied, pushed or
++/// written but the caller's resume point. A plain function whose body is a
++/// leaf ([`leaf_of`]) only. `None`, nothing changed, for any other call.
++///
++/// # Safety
++/// `slots` points to [`LIGHT_SLOTS`] writable slots not in use.
++#[inline(never)]
++pub(super) unsafe fn light_call(
++    vm: &mut Vm,
++    code: &OpArray,
++    site: usize,
++    slots: *mut Value,
++) -> Option<*const Plan> {
++    let plan: &Plan = plan_slot(code, site)?.get()?.as_deref()?;
++    if !matches!(plan.kind, PlanKind::Function)
++        || plan.typed
++        || plan.defaults
++        || plan.fetches
++        || plan.bound != plan.n
++    {
++        plan.leaf.set(2);
++        return None;
++    }
++    if vm.observer.enabled {
++        return None;
++    }
++    match plan.leaf.get() {
++        1 => {}
++        0 if leaf_of(plan) => {}
++        _ => return None,
++    }
++    let caller = vm.frames.last_mut()?;
++    let n = plan.n as usize;
++    for i in 0..n {
++        let ok = match plan.kinds[i] {
++            PLAN_CV => matches!(
++                caller.cvs.get(plan.idx[i] as usize).and_then(crate::vm::CvSlot::get),
++                Some(v) if !matches!(v, Value::Reference(_))
++            ),
++            PLAN_TMP => matches!(
++                caller.tmps.get(plan.idx[i] as usize),
++                Some(v) if !matches!(v, Value::Reference(_))
++            ),
++            _ => code.literals.get(plan.idx[i] as usize).is_some(),
++        };
++        if !ok {
++            return None;
++        }
++    }
++    let (_, _, _, ncv, ntmp) = plan.leaf_at.get();
++    let (ncv_u, ntmp_u) = (ncv as usize, ntmp as usize);
++    // SAFETY: `ncv + ntmp <= LIGHT_SLOTS` (`leaf_of`); the slots are free:
++    // each is initialised here. A compiled variable is an `Option<Value>`
++    // of the same size (`CvSlot`), undefined.
++    unsafe {
++        let cvs = slots.cast::<Option<Value>>();
++        for i in 0..ncv_u {
++            std::ptr::write(cvs.add(i), None);
++        }
++        for i in 0..ntmp_u {
++            std::ptr::write(slots.add(ncv_u + i), Value::Null);
++        }
++        for i in 0..n.min(ncv_u) {
++            let idx = plan.idx[i] as usize;
++            let v = match plan.kinds[i] {
++                PLAN_CV => caller
++                    .cvs
++                    .get(idx)
++                    .and_then(crate::vm::CvSlot::get)
++                    .map_or(Value::Null, clone_value),
++                PLAN_TMP => caller
++                    .tmps
++                    .get_mut(idx)
++                    .map(std::mem::take)
++                    .unwrap_or_default(),
++                _ => code.literals.get(idx).map_or(Value::Null, clone_value),
++            };
++            std::ptr::write(cvs.add(i), Some(v));
++        }
++    }
++    caller.ip = plan.done;
++    Some(std::ptr::from_ref(plan))
++}
++
++/// The return of the light frame `l` (`Op::Return` of `val`): the value
++/// moved into the caller's result slot, the light slots released.
++/// `false`, nothing changed, when that needs a real frame (an undefined
++/// variable returned, a result slot or a slot whose release may run user
++/// code): [`light_materialize`] then.
++///
++/// # Safety
++/// `slots` holds the light frame of `l`.
++#[inline(never)]
++pub(super) unsafe fn light_return(
++    vm: &mut Vm,
++    plan: &Plan,
++    slots: *mut Value,
++    val: Operand,
++) -> bool {
++    let (_, _, lits, ncv, ntmp) = plan.leaf_at.get();
++    let (ncv, ntmp) = (ncv as usize, ntmp as usize);
++    // SAFETY: the light frame's slots (see `light_call`).
++    let (cvs, tmps) = unsafe {
++        (
++            std::slice::from_raw_parts_mut(slots.cast::<Option<Value>>(), ncv),
++            std::slice::from_raw_parts_mut(slots.add(ncv), ntmp),
++        )
++    };
++    let Some(caller) = vm.frames.last_mut() else {
++        return false;
++    };
++    // Releasing what is left must run no user code: scalars and strings.
++    let plain = |v: &Value| {
++        matches!(
++            v,
++            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
++        )
++    };
++    let dst = match plan.dst {
++        Some(t) => match caller.tmps.get(t as usize) {
++            Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => Some(t),
++            _ => return false,
++        },
++        None => None,
++    };
++    let v = match val {
++        Operand::Tmp(t) => match tmps.get(t as usize) {
++            Some(v) if plain(v) || dst.is_some() => (t as usize, true),
++            _ => return false,
++        },
++        Operand::Cv(c) => match cvs.get(c as usize) {
++            Some(Some(v)) if plain(v) || dst.is_some() => (c as usize, false),
++            _ => return false,
++        },
++        Operand::Lit(_) | Operand::Unused => (usize::MAX, false),
++        Operand::TmpKeep(_) => return false,
++    };
++    // Every other slot must release without user code.
++    for (i, c) in cvs.iter().enumerate() {
++        if !(v == (i, false) || c.as_ref().is_none_or(|x| plain(x))) {
++            return false;
++        }
++    }
++    for (i, t) in tmps.iter().enumerate() {
++        if !(v == (i, true) || plain(t)) {
++            return false;
++        }
++    }
++    let result = match val {
++        Operand::Tmp(t) => std::mem::take(&mut tmps[t as usize]),
++        Operand::Cv(c) => cvs[c as usize].take().unwrap_or_default(),
++        Operand::Lit(i) => {
++            // SAFETY: the callee's literals (`Light::lits`), index from its op.
++            unsafe { clone_value(&*lits.cast::<Value>().add(i as usize)) }
++        }
++        _ => Value::Null,
++    };
++    // (Scalars own nothing; only strings are released.)
++    for c in cvs.iter_mut() {
++        if let Some(Value::Str(_)) = c {
++            drop(c.take());
++        }
++    }
++    for t in tmps.iter_mut() {
++        if let Value::Str(_) = t {
++            drop(std::mem::take(t));
++        }
++    }
++    match dst.and_then(|t| caller.tmps.get_mut(t as usize)) {
++        Some(d) => std::mem::forget(std::mem::replace(d, result)),
++        None => drop(result),
++    }
++    true
++}
++
++/// Turns the light frame `l` into the real frame its call would have
++/// pushed (`call_planned`'s), its slots moved there, resuming at the
++/// callee's op `ip`: for anything the light frame cannot run.
++///
++/// # Safety
++/// `slots` holds the light frame of `l`; afterwards it holds nothing.
++#[inline(never)]
++pub(super) unsafe fn light_materialize(vm: &mut Vm, plan: &Plan, slots: *mut Value, ip: usize) {
++    let (_, _, _, ncv, ntmp) = plan.leaf_at.get();
++    let (ncv, ntmp) = (ncv as usize, ntmp as usize);
++    let live = vm.frames.live;
++    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
++    let strict = vm.frames.last().is_some_and(|f| f.code.strict_types);
++    let Some(frame) = vm.frames.vec.get_mut(live) else {
++        return;
++    };
++    if frame.released_direct
++        && frame
++            .ufunc
++            .as_ref()
++            .is_some_and(|f| Rc::as_ptr(f) as usize == plan.uf_addr)
++    {
++        frame.released_direct = false;
++    } else if let Some(uf) = plan.uf.upgrade() {
++        ready_frame_slow(frame, &uf);
++    }
++    // SAFETY: the light frame's slots, each moved out once.
++    unsafe {
++        let cvs = slots.cast::<Option<Value>>();
++        for i in 0..ncv {
++            let v = std::ptr::read(cvs.add(i));
++            match frame.cvs.get_mut(i) {
++                Some(slot) => drop(slot.set(v)),
++                None => drop(v),
++            }
++        }
++        for i in 0..ntmp {
++            let v = std::ptr::read(slots.add(ncv + i));
++            match frame.tmps.get_mut(i) {
++                Some(t) => drop(std::mem::replace(t, v)),
++                None => drop(v),
++            }
++        }
++    }
++    frame.ret = plan.dst.map_or(RetTarget::Discard, RetTarget::Tmp);
++    frame.caller_strict = strict;
++    frame.direct_argc = u32::from(plan.n);
++    frame.ip = ip;
++    frame.direct = true;
++    frame.plain = true;
++    vm.frames.live = live + 1;
++}
+diff --git a/crates/php-vm/src/lib.rs b/crates/php-vm/src/lib.rs
+index 958025d0..51da9e63 100644
+--- a/crates/php-vm/src/lib.rs
++++ b/crates/php-vm/src/lib.rs
+@@ -350,6 +350,11 @@ impl Vm {
+             tape_throw: None,
+             tape_base: 0,
+             tape_base_value: Value::Null,
++            light_slots: php_memlimit::persistent(|| {
++                (0..exec::tape::calls::LIGHT_SLOTS)
++                    .map(|_| std::mem::MaybeUninit::uninit())
++                    .collect()
++            }),
+             builtin_deprecation_reported: false,
+             empty_code,
+             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
+diff --git a/crates/php-vm/src/vm.rs b/crates/php-vm/src/vm.rs
+index f6b088ec..8b121ebc 100644
+--- a/crates/php-vm/src/vm.rs
++++ b/crates/php-vm/src/vm.rs
+@@ -3506,6 +3506,9 @@ pub struct Vm {
+     /// tape (`exec::hot::BASE_RETURNED`), until `Vm::run_base_on_tape`
+     /// takes it.
+     pub(crate) tape_base_value: Value,
++    /// The slots of the light frame of a leaf call (`exec::tape::calls::light_call`):
++    /// one at a time, compiled variables then temporaries.
++    pub(crate) light_slots: Box<[std::mem::MaybeUninit<Value>]>,
+     /// Set by `op_do_call_nodiscard` when it already reported a native
+     /// function's deprecation (`call_builtin_impl` consumes it).
+     pub(crate) builtin_deprecation_reported: bool,

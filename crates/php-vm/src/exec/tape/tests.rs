@@ -2181,3 +2181,26 @@ fn isset_of_nested_elements_has_a_row() {
         "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true\n"
     );
 }
+
+/// A call without arguments right after its start (`return $o->get();`,
+/// a callback's whole body) is an entry point of the tape: the `DoCall`'s
+/// row is an exit the tape takes itself (`run_call`), so the tape runs
+/// the call and the return after it instead of leaving the body to
+/// `Vm::run` (a native code's callback then never entered the tape).
+#[test]
+fn a_call_without_arguments_is_worth_entering() {
+    let src = "<?php class D { public $t = 'x'; function get() { return $this->t; } }
+        function f($o) { return $o->get(); }
+        echo implode(',', array_map(static function ($d) { return $d->get(); }, [new D, new D])), f(new D), \"\\n\";";
+    for code in op_arrays(src) {
+        let tape = lower(&code);
+        for (i, op) in code.ops.iter().enumerate() {
+            if matches!(op, Op::InitMethodCall { .. })
+                && matches!(code.ops.get(i + 1), Some(Op::DoCall { .. }))
+            {
+                assert!(tape[i].enter, "op {i} of {:?}", code.ops);
+            }
+        }
+    }
+    assert_eq!(run(src), "x,xx\n");
+}

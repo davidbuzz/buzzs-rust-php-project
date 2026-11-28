@@ -328,6 +328,10 @@ pub enum MatchKey {
     Str(Box<[u8]>),
 }
 
+/// Up to how many entries a [`MatchTable`] lookup compares the keys in
+/// order instead of hashing the subject.
+const SCANNED_ENTRIES: usize = 8;
+
 /// The jump table of [`Op::Match`].
 #[derive(Clone, Debug)]
 pub struct MatchTable {
@@ -335,12 +339,22 @@ pub struct MatchTable {
     /// order); a repeated key keeps its first target (`zend_hash_add`).
     pub entries: Vec<(MatchKey, Label)>,
     /// Where an unlisted value or a subject that is neither an int nor a
-    /// string jumps: the default arm or the `MatchError`.
+    /// string jumps: the default arm or the `MatchError`. (A `switch`
+    /// table's: the `default` case, or the end of the statement.)
     pub default: Label,
+    /// A `switch` statement's table (`ZEND_SWITCH_LONG` /
+    /// `ZEND_SWITCH_STRING`) rather than a `match`'s: a subject of another
+    /// type than its keys goes on to the next op, the statement's `case`
+    /// comparisons ([`MatchTable::switch_target`]).
+    pub switch: bool,
     /// Integer key -> index into `entries`.
-    ints: std::collections::HashMap<i64, usize>,
+    ints: rustc_hash::FxHashMap<i64, usize>,
     /// String key -> index into `entries`.
-    strs: std::collections::HashMap<Box<[u8]>, usize>,
+    strs: rustc_hash::FxHashMap<Box<[u8]>, usize>,
+    /// The PHP hash of each string key with its index into `entries`,
+    /// sorted by hash: a subject string's hash is cached in it, so a
+    /// lookup is a binary search and one comparison of the bytes.
+    by_hash: Vec<(u64, u32)>,
 }
 
 impl MatchTable {
@@ -350,8 +364,10 @@ impl MatchTable {
         MatchTable {
             entries: Vec::new(),
             default,
-            ints: std::collections::HashMap::new(),
-            strs: std::collections::HashMap::new(),
+            switch: false,
+            ints: rustc_hash::FxHashMap::default(),
+            strs: rustc_hash::FxHashMap::default(),
+            by_hash: Vec::new(),
         }
     }
 
@@ -378,6 +394,12 @@ impl MatchTable {
             }
         };
         if added {
+            if let MatchKey::Str(s) = &key {
+                let h = php_runtime::string::zend_hash_bytes(s);
+                let pos = self.by_hash.partition_point(|&(kh, _)| kh <= h);
+                self.by_hash
+                    .insert(pos, (h, u32::try_from(at).unwrap_or(u32::MAX)));
+            }
             self.entries.push((key, target));
         }
         added
@@ -386,13 +408,61 @@ impl MatchTable {
     /// The jump target for a (dereferenced) subject value.
     #[must_use]
     pub fn target(&self, v: &Value) -> Label {
-        let at = match v {
-            Value::Int(i) => self.ints.get(i),
-            Value::Str(s) => self.strs.get(s.as_bytes()),
+        match v {
+            Value::Int(i) => self.int_case(*i),
+            Value::Str(s) => self.str_case(s),
             _ => None,
+        }
+        .unwrap_or(self.default)
+    }
+
+    /// The target listed for int key `i`: a small table's entries
+    /// compared in order (cheaper than hashing the key), a larger one's
+    /// looked up.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one row's lookup, in the tape's handler
+    fn int_case(&self, i: i64) -> Option<Label> {
+        if self.entries.len() <= SCANNED_ENTRIES {
+            return self
+                .entries
+                .iter()
+                .find_map(|(k, l)| matches!(k, MatchKey::Int(n) if *n == i).then_some(*l));
+        }
+        let &at = self.ints.get(&i)?;
+        self.entries.get(at).map(|&(_, l)| l)
+    }
+
+    /// [`MatchTable::int_case`] of a string key, found by the string's
+    /// cached hash.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one row's lookup, in the tape's handler
+    fn str_case(&self, s: &ZStr) -> Option<Label> {
+        let h = s.hash_value();
+        let from = self.by_hash.partition_point(|&(kh, _)| kh < h);
+        self.by_hash[from..]
+            .iter()
+            .take_while(|&&(kh, _)| kh == h)
+            .find_map(|&(_, at)| match self.entries.get(at as usize)? {
+                (MatchKey::Str(b), l) if **b == *s.as_bytes() => Some(*l),
+                _ => None,
+            })
+    }
+
+    /// A `switch` table's jump for a (dereferenced) subject
+    /// (`ZEND_SWITCH_LONG` / `ZEND_SWITCH_STRING`): an int subject of an
+    /// int table or a string subject of a string table (whose keys are
+    /// never numeric strings, so loose and strict equality agree) jumps to
+    /// its case or the default; `None` for any other value, which the
+    /// `case` comparisons after the op then test one by one.
+    #[inline]
+    #[must_use]
+    pub fn switch_target(&self, v: &Value) -> Option<Label> {
+        let to = match v {
+            Value::Int(i) if self.strs.is_empty() => self.int_case(*i),
+            Value::Str(s) if self.ints.is_empty() => self.str_case(s),
+            _ => return None,
         };
-        at.and_then(|&k| self.entries.get(k))
-            .map_or(self.default, |&(_, l)| l)
+        Some(to.unwrap_or(self.default))
     }
 
     /// Every jump target: the entries' in order, then the default.

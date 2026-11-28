@@ -208,3 +208,65 @@ fn node_list_iterators_rewind_only_before_moving() {
         "01 12 Iterator does not support rewinding"
     );
 }
+
+/// `hasAttribute()` and `getAttribute()` of a string and `hasChildNodes()`
+/// take the direct library call (`methods::fast_method`): legacy and
+/// `Dom\\` elements, missing and empty attributes, namespace
+/// declarations, prefixed names, text and document nodes, an element
+/// outside a document; other argument shapes (an int, a null) and an
+/// uninitialized object take the generic path. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn direct_element_reads_match_php_src() {
+    assert_eq!(
+        run(
+            r#"$d = new DOMDocument; $d->loadXML('<r xmlns:p="urn:p" a="1" p:b="2" e=""><c>t</c><x/></r>'); $e = $d->documentElement;
+foreach ([1, 2] as $i) {
+  foreach (['a', 'p:b', 'b', 'e', 'zz', 'xmlns:p', 'A', ''] as $n) { echo $n, ":", var_export($e->hasAttribute($n), true), "/", var_export($e->getAttribute($n), true), " "; } echo "\n";
+  var_dump($e->hasChildNodes(), $e->firstChild->hasChildNodes(), $e->lastChild->hasChildNodes(), $e->firstChild->firstChild->hasChildNodes(), $d->hasChildNodes());
+  var_dump($e->getAttribute(1), $e->hasAttribute(1));
+  var_dump(@$e->getAttribute(null));
+}
+$h = Dom\XMLDocument::createFromString('<r a="1"><c/></r>'); $he = $h->documentElement;
+for ($i = 0; $i < 2; $i++) { var_dump($he->getAttribute('a'), $he->getAttribute('zz'), $he->hasAttribute('a'), $he->hasChildNodes()); }
+$n = new DOMElement('solo', 'v'); for ($i = 0; $i < 2; $i++) { var_dump($n->hasAttribute('x'), $n->getAttribute('x'), $n->hasChildNodes()); }
+class MyEl extends DOMElement { function __construct() {} }
+try { (new MyEl)->hasAttribute('x'); } catch (Error $err) { echo get_class($err), ": ", $err->getMessage(), "\n"; }
+"#
+        ),
+        r#"a:true/'1' p:b:true/'2' b:false/'' e:true/'' zz:false/'' xmlns:p:true/'urn:p' A:false/'' :false/'' 
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+string(0) ""
+bool(false)
+string(0) ""
+a:true/'1' p:b:true/'2' b:false/'' e:true/'' zz:false/'' xmlns:p:true/'urn:p' A:false/'' :false/'' 
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+string(0) ""
+bool(false)
+string(0) ""
+string(1) "1"
+NULL
+bool(true)
+bool(true)
+string(1) "1"
+NULL
+bool(true)
+bool(true)
+bool(false)
+string(0) ""
+bool(true)
+bool(false)
+string(0) ""
+bool(true)
+Error: Couldn't fetch MyEl
+"#
+    );
+}

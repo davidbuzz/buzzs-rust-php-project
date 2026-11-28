@@ -164,7 +164,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::InstanceOf {
-                class: ClassSpec::Named(_),
+                class: ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
                 ..
             }
             // `&$cv` and `$cv =& <reference>` of a plain variable
@@ -197,6 +197,12 @@ pub(super) const LEFT: usize = usize::MAX - 1;
 /// propagates it as its own generic `DoCall` would. A sentinel instead of
 /// a `Result`: the result stays two registers wide on every return.
 pub(super) const THREW: usize = usize::MAX - 2;
+
+/// The second half of [`super::tape::run_tape`]'s result when the base
+/// frame of the nested execution `Vm::run_base_on_tape` started returned
+/// on the tape ([`Vm::return_plain`](crate::vm::Vm)): the frame is
+/// released and popped, and the value is in `Vm::tape_base_value`.
+pub(super) const BASE_RETURNED: usize = usize::MAX - 3;
 
 /// Whether `op` is a call or a return [`super::tape::run_tape`] makes itself when its
 /// fast path applies (`Vm::push_simple_ucall`, `Vm::return_simple`).
@@ -410,7 +416,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             if !bin_tmp(f, lits, kind, a, b, dst) {
                 // `ZEND_CONCAT` of strings and integers.
                 if kind == BinKind::Arith(BinaryOp::Concat) {
-                    if f.tmps.len() <= dst as usize {
+                    if f.slots.tmps().len() <= dst as usize {
                         return DECLINED;
                     }
                     let Some(s) = concat_ext(f, lits, a, b) else {
@@ -422,7 +428,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 let Some(r) = equality(f, kind, a, b) else {
                     return DECLINED;
                 };
-                let Some(slot) = f.tmps.get_mut(dst as usize) else {
+                let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) else {
                     return DECLINED;
                 };
                 put_tmp(slot, Value::Bool(r));
@@ -442,7 +448,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             // `ZEND_CONCAT` of strings and integers: the result goes to
             // `dst`, and the `AssignCv` after the op stores it.
             None if kind == BinKind::Arith(BinaryOp::Concat) => {
-                if f.tmps.len() <= dst as usize {
+                if f.slots.tmps().len() <= dst as usize {
                     return DECLINED;
                 }
                 let Some(s) = concat_ext(f, lits, a, b) else {
@@ -456,7 +462,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 };
                 if store_plain(f, cv, Value::Bool(r)) {
                     ip += 1;
-                } else if let Some(slot) = f.tmps.get_mut(dst as usize) {
+                } else if let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) {
                     put_tmp(slot, Value::Bool(r));
                 }
             }
@@ -720,10 +726,14 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         // before (the generic op fills it; it never autoloads).
         Op::InstanceOf {
             a,
-            class: ClassSpec::Named(lit),
+            class:
+                ref class @ (ClassSpec::Named(_)
+                | ClassSpec::SelfClass
+                | ClassSpec::Static
+                | ClassSpec::Parent),
             dst,
         } => {
-            let Some(r) = instanceof_in(f, lits, a, lit) else {
+            let Some(r) = instanceof_in(f, lits, a, class) else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
@@ -815,7 +825,7 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             }
         }
         Op::Free(Operand::Tmp(t)) => {
-            let Some(slot) = f.tmps.get_mut(t as usize) else {
+            let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) else {
                 return DECLINED;
             };
             if !is_plain_slot(Some(&*slot)) {
@@ -936,7 +946,7 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             a,
             dst,
         } => {
-            if f.tmps.len() <= dst as usize {
+            if f.slots.tmps().len() <= dst as usize {
                 return DECLINED;
             }
             let Some(s) = cast_string_in(f, lits, a) else {
@@ -953,7 +963,7 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         // `ZEND_ROPE_END` of strings and integers.
         Op::Rope { ref parts, dst } => {
-            if f.tmps.len() <= dst as usize {
+            if f.slots.tmps().len() <= dst as usize {
                 return DECLINED;
             }
             let Some(s) = rope_in(f, lits, parts) else {
@@ -1079,7 +1089,7 @@ pub(super) fn fe_reset_array_in(
     }
     let arr = match subject {
         Operand::Cv(cv) if !f.symtab_attached => {
-            match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+            match f.slots.cvs().get(cv as usize).and_then(CvSlot::get)? {
                 Value::Array(a) => a.clone(),
                 Value::Reference(r) => match &*r.try_borrow()? {
                     Value::Array(a) => a.clone(),
@@ -1093,7 +1103,7 @@ pub(super) fn fe_reset_array_in(
             _ => return None,
         },
         Operand::Tmp(t) => {
-            let slot = f.tmps.get_mut(t as usize)?;
+            let slot = f.slots.tmps_mut().get_mut(t as usize)?;
             if !matches!(slot, Value::Array(_)) {
                 return None;
             }
@@ -1150,14 +1160,14 @@ fn recv_literal_default_in(
     }
     // A by-reference parameter the call did not reach gets a copy of the
     // default as any other (`ZEND_RECV_INIT`'s `ZVAL_COPY`: no reference).
-    let param = f.ufunc.as_ref()?.params.get(n as usize)?;
+    let param = f.ufunc()?.params.get(n as usize)?;
     if let Some(ty) = &param.ty {
         if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
             return None;
         }
     }
     let value = crate::call::clone_value(value);
-    let slot = f.cvs.get_mut(cv as usize)?;
+    let slot = f.slots.cvs_mut().get_mut(cv as usize)?;
     if slot.get().is_some() {
         return None;
     }
@@ -1183,13 +1193,13 @@ fn recv_computed_default_in(f: &mut Frame, n: u32, cv: u32, t: u32) -> bool {
     if f.symtab_attached {
         return false;
     }
-    let Some(value) = f.tmps.get(t as usize) else {
+    let Some(value) = f.slots.tmps().get(t as usize) else {
         return false;
     };
     if matches!(value, Value::Reference(_)) {
         return false;
     }
-    let Some(uf) = f.ufunc.as_ref() else {
+    let Some(uf) = f.ufunc() else {
         return false;
     };
     let Some(param) = uf.params.get(n as usize) else {
@@ -1200,11 +1210,11 @@ fn recv_computed_default_in(f: &mut Frame, n: u32, cv: u32, t: u32) -> bool {
             return false;
         }
     }
-    if f.cvs.get(cv as usize).is_none_or(CvSlot::is_some) {
+    if f.slots.cvs().get(cv as usize).is_none_or(CvSlot::is_some) {
         return false;
     }
-    let value = std::mem::take(&mut f.tmps[t as usize]);
-    if let Some(slot) = f.cvs.get_mut(cv as usize) {
+    let value = std::mem::take(&mut f.slots.tmps_mut()[t as usize]);
+    if let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) {
         let old = slot.set(Some(value));
         debug_assert!(old.is_none());
         drop(old);
@@ -1256,7 +1266,7 @@ pub(super) fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
 #[allow(clippy::inline_always)]
 fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
     let n = match a {
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+        Operand::Cv(cv) => match f.slots.cvs().get(cv as usize).and_then(CvSlot::get)? {
             Value::Str(s) => s.len(),
             _ => return None,
         },
@@ -1264,12 +1274,12 @@ fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
             Value::Str(s) => s.len(),
             _ => return None,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize)? {
             Value::Str(s) => s.len(),
             _ => return None,
         },
         Operand::Tmp(t) => {
-            let slot = f.tmps.get_mut(t as usize)?;
+            let slot = f.slots.tmps_mut().get_mut(t as usize)?;
             let Value::Str(s) = slot else {
                 return None;
             };
@@ -1289,7 +1299,7 @@ fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
 #[allow(clippy::inline_always)]
 pub(super) fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
     let n = match a {
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+        Operand::Cv(cv) => match f.slots.cvs().get(cv as usize).and_then(CvSlot::get)? {
             Value::Array(arr) => arr.len(),
             _ => return None,
         },
@@ -1297,12 +1307,12 @@ pub(super) fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64>
             Value::Array(arr) => arr.len(),
             _ => return None,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize)? {
             Value::Array(arr) => arr.len(),
             _ => return None,
         },
         Operand::Tmp(t) => {
-            let slot = f.tmps.get_mut(t as usize)?;
+            let slot = f.slots.tmps_mut().get_mut(t as usize)?;
             let Value::Array(arr) = slot else {
                 return None;
             };
@@ -1325,13 +1335,14 @@ pub(super) fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64>
 pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
     use crate::opcode::type_mask::matches;
     match a {
-        Operand::Cv(cv) if !f.symtab_attached => {
-            Some(matches(mask, f.cvs.get(cv as usize).and_then(CvSlot::get)?))
-        }
+        Operand::Cv(cv) if !f.symtab_attached => Some(matches(
+            mask,
+            f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?,
+        )),
         Operand::Lit(i) => Some(matches(mask, lits.get(i as usize)?)),
-        Operand::TmpKeep(t) => Some(matches(mask, f.tmps.get(t as usize)?)),
+        Operand::TmpKeep(t) => Some(matches(mask, f.slots.tmps().get(t as usize)?)),
         Operand::Tmp(t) => {
-            let v = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let v = std::mem::take(f.slots.tmps_mut().get_mut(t as usize)?);
             let r = matches(mask, &v);
             discard_unrooted(Some(v));
             Some(r)
@@ -1348,7 +1359,12 @@ pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8)
 /// undefined (the generic op warns) or attached to a symbol table.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+pub(super) fn instanceof_in(
+    f: &mut Frame,
+    lits: &[Value],
+    a: Operand,
+    class: &ClassSpec,
+) -> Option<bool> {
     // `ZEND_INSTANCEOF` of anything but an object is false, the class not
     // looked at (a class never loaded, `$array instanceof Enumerable` in
     // `Arr::exists()`, left every such test to the generic op).
@@ -1361,25 +1377,36 @@ pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32)
     };
     let operand_is_obj = match a {
         Operand::Cv(cv) if !f.symtab_attached => {
-            is_obj(f.cvs.get(cv as usize).and_then(CvSlot::get)?)
+            is_obj(f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?)
         }
         Operand::Lit(i) => is_obj(lits.get(i as usize)?),
-        Operand::TmpKeep(t) | Operand::Tmp(t) => is_obj(f.tmps.get(t as usize)?),
+        Operand::TmpKeep(t) | Operand::Tmp(t) => is_obj(f.slots.tmps().get(t as usize)?),
         Operand::Cv(_) | Operand::Unused => return None,
     };
     if !operand_is_obj {
         if let Operand::Tmp(t) = a {
-            discard_unrooted(Some(std::mem::take(f.tmps.get_mut(t as usize)?)));
+            discard_unrooted(Some(std::mem::take(
+                f.slots.tmps_mut().get_mut(t as usize)?,
+            )));
         }
         return Some(false);
     }
-    let cls = f
-        .code
-        .class_cache
-        .try_borrow()
-        .ok()?
-        .get(lit as usize)?
-        .upgrade()?;
+    // The class is looked at only for an object, as `ZEND_INSTANCEOF`
+    // fetches it: a named one from the run-time cache, `self`, `static`
+    // and `parent` from the frame (none there: the generic op's error).
+    let cls = match *class {
+        ClassSpec::Named(lit) => f
+            .code
+            .class_cache
+            .try_borrow()
+            .ok()?
+            .get(lit as usize)?
+            .upgrade()?,
+        ClassSpec::SelfClass => f.scope.clone()?,
+        ClassSpec::Static => f.called.clone()?,
+        ClassSpec::Parent => f.scope.as_ref()?.parent.clone()?,
+        ClassSpec::Dyn(_) => return None,
+    };
     let test = |v: &Value| -> Option<bool> {
         Some(match v {
             Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),
@@ -1392,16 +1419,16 @@ pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32)
     };
     match a {
         Operand::Cv(cv) if !f.symtab_attached => {
-            test(f.cvs.get(cv as usize).and_then(CvSlot::get)?)
+            test(f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?)
         }
         Operand::Lit(i) => test(lits.get(i as usize)?),
-        Operand::TmpKeep(t) => test(f.tmps.get(t as usize)?),
+        Operand::TmpKeep(t) => test(f.slots.tmps().get(t as usize)?),
         Operand::Tmp(t) => {
-            let value = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let value = std::mem::take(f.slots.tmps_mut().get_mut(t as usize)?);
             let result = test(&value);
             if result.is_none() {
                 // Put back for the generic op.
-                if let Some(slot) = f.tmps.get_mut(t as usize) {
+                if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
                     *slot = value;
                 }
                 return None;
@@ -1440,7 +1467,7 @@ fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<
             Some(!matches!(v, Value::Null))
         }
     };
-    match f.cvs.get(*cv as usize)?.get() {
+    match f.slots.cvs().get(*cv as usize)?.get() {
         None => Some(empty),
         Some(Value::Reference(r)) => decide(&*r.try_borrow()?),
         Some(v) => decide(v),
@@ -1476,7 +1503,7 @@ fn isset_place_in(f: &mut Frame, place: crate::opcode::PlaceId, empty: bool) -> 
 #[cold]
 #[inline(never)]
 fn sync_cv_cold(f: &Frame, cv: u32) {
-    if let Some(v) = f.cvs.get(cv as usize).and_then(CvSlot::get_clone) {
+    if let Some(v) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get_clone) {
         f.sync_cv_to_symtab(cv, &v);
     }
 }
@@ -1500,7 +1527,7 @@ fn scalar_copy(v: &Value) -> Value {
 #[inline(always)]
 #[allow(clippy::inline_always)]
 pub(super) fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
-    if let Some(slot) = f.tmps.get_mut(t as usize) {
+    if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
         put_tmp(slot, v);
     }
 }
@@ -1513,7 +1540,7 @@ pub(super) fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
 fn take_bool(f: &mut Frame, op: Operand) -> Option<bool> {
     match op {
         Operand::Tmp(t) => {
-            let slot = f.tmps.get_mut(t as usize)?;
+            let slot = f.slots.tmps_mut().get_mut(t as usize)?;
             if let Value::Bool(b) = *slot {
                 // A bool has nothing to drop: overwrite it without the
                 // out-of-line `drop_in_place`.
@@ -1568,7 +1595,7 @@ fn bare_cv_in(f: &Frame, place: PlaceId) -> Option<usize> {
 /// nothing, for any other place or frame.
 fn ref_cv_in(f: &mut Frame, place: PlaceId) -> Option<PhpRef> {
     let cv = bare_cv_in(f, place)?;
-    let slot = f.cvs.get_mut(cv)?.as_mut();
+    let slot = f.slots.cvs_mut().get_mut(cv)?.as_mut();
     Some(slot.get_or_insert(Value::Null).make_ref())
 }
 
@@ -1589,10 +1616,10 @@ fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -
     let Some(cv) = bare_cv_in(f, place) else {
         return false;
     };
-    if cv >= f.cvs.len() {
+    if cv >= f.slots.cvs().len() {
         return false;
     }
-    let Some(tmp) = f.tmps.get_mut(src as usize) else {
+    let Some(tmp) = f.slots.tmps_mut().get_mut(src as usize) else {
         return false;
     };
     if !matches!(tmp, Value::Reference(_)) {
@@ -1601,7 +1628,7 @@ fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -
     let Value::Reference(r) = std::mem::take(tmp) else {
         return false;
     };
-    let Some(slot) = f.cvs.get_mut(cv) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv) else {
         return false;
     };
     let old = slot.set(Some(Value::Reference(r.clone())));
@@ -1623,7 +1650,7 @@ fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -
 fn operand_truth(f: &mut Frame, op: Operand) -> Option<bool> {
     match op {
         Operand::Tmp(t) => {
-            let slot = f.tmps.get_mut(t as usize)?;
+            let slot = f.slots.tmps_mut().get_mut(t as usize)?;
             let b = match *slot {
                 Value::Null => false,
                 Value::Bool(b) => b,
@@ -1635,7 +1662,7 @@ fn operand_truth(f: &mut Frame, op: Operand) -> Option<bool> {
             std::mem::forget(std::mem::take(slot));
             Some(b)
         }
-        Operand::TmpKeep(t) => plain_truth(f.tmps.get(t as usize)?),
+        Operand::TmpKeep(t) => plain_truth(f.slots.tmps().get(t as usize)?),
         Operand::Cv(cv) => f.peek_cv(cv, slot_truth),
         Operand::Lit(i) => plain_truth(f.code.literals.get(i as usize)?),
         Operand::Unused => None,
@@ -1651,12 +1678,12 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
     // A variable or a literal (nearly every numeric operand) by tag tests
     // and predicted branches, not through the operand kind's jump table.
     let v = if let Operand::Cv(cv) = op {
-        f.cvs.get(cv as usize).and_then(CvSlot::get)?
+        f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?
     } else if let Operand::Lit(i) = op {
         lits.get(i as usize)?
     } else {
         match op {
-            Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+            Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
             Operand::Cv(_) | Operand::Lit(_) | Operand::Unused => return None,
         }
     };
@@ -1674,7 +1701,7 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
 #[allow(clippy::inline_always)]
 fn int_of(f: &Frame, lits: &[Value], op: Operand) -> Option<i64> {
     let v = if let Operand::Cv(cv) = op {
-        f.cvs.get(cv as usize).and_then(CvSlot::get)?
+        f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?
     } else if let Operand::Lit(i) = op {
         lits.get(i as usize)?
     } else {
@@ -1886,7 +1913,7 @@ fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
     };
     // Reading the operands changed nothing: a missing slot can decline
     // before the result is computed.
-    let Some(slot) = f.tmps.get_mut(dst as usize) else {
+    let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) else {
         return false;
     };
     match arith_num(op, x, y) {
@@ -1917,7 +1944,7 @@ fn bin_tmp_other(slot: &mut Value, op: BinKind, x: Num, y: Num) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn store_plain(f: &mut Frame, cv: u32, v: Value) -> bool {
-    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
     if !is_plain_slot(slot.as_ref()) {
@@ -1950,7 +1977,7 @@ fn bin_assign_cv(
     let Some(n) = arith_num(op, x, y) else {
         return bin_assign_cv_other(f, op, x, y, cv, dst);
     };
-    if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
+    if let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) {
         if put_num_cv(slot, n) {
             if f.symtab_attached {
                 sync_cv_cold(f, cv);
@@ -1958,7 +1985,7 @@ fn bin_assign_cv(
             return Some(true);
         }
     }
-    let slot = f.tmps.get_mut(dst as usize)?;
+    let slot = f.slots.tmps_mut().get_mut(dst as usize)?;
     put_num_tmp(slot, n);
     Some(false)
 }
@@ -1975,7 +2002,7 @@ fn bin_assign_cv_other(
     dst: u32,
 ) -> Option<bool> {
     let r = num_bin(op, x, y)?;
-    if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
+    if let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) {
         if is_plain_slot(slot.as_ref()) {
             discard_unrooted(slot.replace(r));
             if f.symtab_attached {
@@ -1984,7 +2011,7 @@ fn bin_assign_cv_other(
             return Some(true);
         }
     }
-    let slot = f.tmps.get_mut(dst as usize)?;
+    let slot = f.slots.tmps_mut().get_mut(dst as usize)?;
     put_tmp(slot, r);
     Some(false)
 }
@@ -2013,7 +2040,7 @@ fn incdec_cv(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn incdec_cv_num(f: &mut Frame, cv: u32, kind: IncDecKind) -> Option<(Num, Num)> {
-    let slot = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut)?;
+    let slot = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut)?;
     let r = match slot.as_mut() {
         Some(Value::Int(i)) => {
             let old = *i;
@@ -2068,7 +2095,7 @@ fn assign_op_cv(
     let Some(y) = num_of(f, lits, val) else {
         return false;
     };
-    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
     let x = match *slot {
@@ -2089,7 +2116,7 @@ fn assign_op_cv(
         sync_cv_cold(f, cv);
     }
     if let Some(t) = dst {
-        if let Some(s) = f.tmps.get_mut(t as usize) {
+        if let Some(s) = f.slots.tmps_mut().get_mut(t as usize) {
             put_num_tmp(s, n);
         }
     }
@@ -2111,7 +2138,7 @@ fn assign_op_cv_other(
     let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
         return false;
     };
-    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
     let keep = dst.map(|_| scalar_copy(&r));
@@ -2137,7 +2164,7 @@ fn assign_op_cv_other(
 #[inline(always)]
 #[allow(clippy::inline_always)]
 pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32>) -> bool {
-    let rooted = match f.cvs.get(cv as usize).map(CvSlot::get) {
+    let rooted = match f.slots.cvs().get(cv as usize).map(CvSlot::get) {
         Some(Some(Value::Array(_) | Value::Object(_))) if !f.symtab_attached => true,
         Some(Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))) | None => {
             return false;
@@ -2147,11 +2174,11 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
     let v = match val {
         // Consumed, as `read` does; a reference held by the temporary is
         // left to the generic path (it derefs and releases it).
-        Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+        Operand::Tmp(t) => match f.slots.tmps_mut().get_mut(t as usize) {
             Some(s) if !matches!(s, Value::Reference(_)) => std::mem::take(s),
             _ => return false,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
             Some(s) if !matches!(s, Value::Reference(_)) => scalar_copy(s),
             _ => return false,
         },
@@ -2159,7 +2186,7 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
             Some(l) if !matches!(l, Value::Reference(_)) => scalar_copy(l),
             _ => return false,
         },
-        Operand::Cv(src) => match f.cvs.get(src as usize).and_then(CvSlot::get) {
+        Operand::Cv(src) => match f.slots.cvs().get(src as usize).and_then(CvSlot::get) {
             Some(Value::Reference(r)) => r.get(),
             Some(s) => scalar_copy(s),
             None => return false,
@@ -2171,7 +2198,7 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
     if let Some(d) = dst {
         set_tmp_in(f, d, scalar_copy(&v));
     }
-    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
     let old = slot.replace(v);
@@ -2208,17 +2235,17 @@ fn move_in(f: &mut Frame, src: Operand, dst: u32) -> bool {
             };
             v
         }
-        Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+        Operand::Tmp(t) => match f.slots.tmps_mut().get_mut(t as usize) {
             Some(slot) if !matches!(slot, Value::Reference(_)) => std::mem::take(slot),
             _ => return false,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
             Some(slot) if !matches!(slot, Value::Reference(_)) => scalar_copy(slot),
             _ => return false,
         },
         Operand::Unused => Value::Null,
     };
-    put_tmp(&mut f.tmps[dst as usize], v);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     true
 }
 
@@ -2243,7 +2270,7 @@ fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Some(v) = v else {
         return Some(false);
     };
-    put_tmp(&mut f.tmps[dst as usize], v);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     Some(true)
 }
 
@@ -2257,19 +2284,19 @@ fn coalesce_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Tmp(t) = a else {
         return None;
     };
-    match f.tmps.get(t as usize)? {
+    match f.slots.tmps().get(t as usize)? {
         Value::Null => return Some(false),
         Value::Reference(_) => return None,
         _ => {}
     }
     if !matches!(
-        f.tmps.get(dst as usize)?,
+        f.slots.tmps().get(dst as usize)?,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
     ) {
         return None;
     }
-    let v = std::mem::take(&mut f.tmps[t as usize]);
-    put_tmp(&mut f.tmps[dst as usize], v);
+    let v = std::mem::take(&mut f.slots.tmps_mut()[t as usize]);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     Some(true)
 }
 
@@ -2289,7 +2316,7 @@ fn jmp_set_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Some(v) = found else {
         return Some(false);
     };
-    put_tmp(&mut f.tmps[dst as usize], v);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     Some(true)
 }
 
@@ -2304,19 +2331,19 @@ fn jmp_set_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Tmp(t) = a else {
         return None;
     };
-    let truth = plain_truth(f.tmps.get(t as usize)?)?;
+    let truth = plain_truth(f.slots.tmps().get(t as usize)?)?;
     if !truth {
-        f.tmps[t as usize] = Value::Null;
+        f.slots.tmps_mut()[t as usize] = Value::Null;
         return Some(false);
     }
     if !matches!(
-        f.tmps.get(dst as usize)?,
+        f.slots.tmps().get(dst as usize)?,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
     ) {
         return None;
     }
-    let v = std::mem::take(&mut f.tmps[t as usize]);
-    put_tmp(&mut f.tmps[dst as usize], v);
+    let v = std::mem::take(&mut f.slots.tmps_mut()[t as usize]);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     Some(true)
 }
 
@@ -2336,7 +2363,7 @@ fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32, chain: NullChain) -> Option<
         _ => Some(false),
     })?;
     if null {
-        put_tmp(&mut f.tmps[dst as usize], chain.value());
+        put_tmp(&mut f.slots.tmps_mut()[dst as usize], chain.value());
     }
     Some(null)
 }

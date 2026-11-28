@@ -38,7 +38,7 @@ pub use crate::vm::{Throw, VmResult};
 /// Method/property flag bits for [`ClassBuilder`].
 pub mod acc {
     pub use crate::func::flags::{
-        ABSTRACT, DEPRECATED, FINAL, NO_MODULE, PRIVATE, PROTECTED, PUBLIC, READONLY, STATIC,
+        ABSTRACT, DEPRECATED, FINAL, NO_MODULE, PRIVATE, PROTECTED, PUBLIC, PURE, READONLY, STATIC,
         STATIC_KEEPS_THIS, VIRTUAL,
     };
 }
@@ -306,6 +306,34 @@ pub type RequestInputFn =
 thread_local! {
     static REQUEST_INPUT_HOOK: std::cell::Cell<Option<RequestInputFn>> =
         const { std::cell::Cell::new(None) };
+}
+
+/// Whether a `preg_*` call with the pattern `pattern` can report nothing
+/// (the pattern is compiled and cached for the current settings, so no
+/// compilation warning can follow), installed by the PCRE extension: the
+/// tape then calls `preg_match($pattern, $subject)` and
+/// `preg_replace($pattern, $replacement, $subject)` of strings without a
+/// frame (`special::leaf::PREG_MATCH`, `PREG_REPLACE`).
+pub type PregLeafFn = fn(&ZStr) -> bool;
+
+thread_local! {
+    static PREG_LEAF_HOOK: std::cell::Cell<Option<PregLeafFn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs the PCRE extension's [`PregLeafFn`].
+pub fn set_preg_leaf_hook(f: PregLeafFn) {
+    PREG_LEAF_HOOK.with(|h| h.set(Some(f)));
+}
+
+/// The installed [`PregLeafFn`]'s answer for `pattern`; `false` without
+/// one.
+pub(crate) fn preg_leaf(pattern: &ZStr) -> bool {
+    PREG_LEAF_HOOK
+        .try_with(std::cell::Cell::get)
+        .ok()
+        .flatten()
+        .is_some_and(|f| f(pattern))
 }
 
 /// Installs the request input parser of an extension (see
@@ -1282,12 +1310,39 @@ impl Vm {
     }
 
     /// Calls a method by name on an object.
+    ///
+    /// The method found for a class and name is remembered
+    /// ([`Vm::method_name_cache`]): an extension calling the same method
+    /// of objects of one class over and over (SPL's `FilterIterator` calling
+    /// `accept()` for every element) looks it up once, where the lookup by
+    /// name cost ~600 instructions a call. A name the class has no method
+    /// for goes the usual way (`__call`) every time.
     pub fn call_method_by_name(
         &mut self,
         o: &Obj,
         name: &str,
         args: Vec<Value>,
     ) -> VmResult<Value> {
+        let cls = crate::object::class_of(o);
+        let hit = self.method_name_cache.iter().find_map(|(c, n, m)| {
+            (std::ptr::eq(c.as_ptr(), Rc::as_ptr(cls)) && &**n == name)
+                .then(|| m.upgrade())
+                .flatten()
+        });
+        if let Some(m) = hit {
+            return Ok(self.call_method(o, &m, args)?.deref());
+        }
+        if let Some(m) = crate::call::class_method_lc(cls, name) {
+            let entry = (Rc::downgrade(cls), Box::from(name), Rc::downgrade(&m));
+            let slot = self.method_name_cache_next % METHOD_NAME_CACHE;
+            if let Some(e) = self.method_name_cache.get_mut(slot) {
+                *e = entry;
+            } else {
+                self.method_name_cache.push(entry);
+            }
+            self.method_name_cache_next = self.method_name_cache_next.wrapping_add(1);
+            return Ok(self.call_method(o, &m, args)?.deref());
+        }
         self.call_method_name(o, name, args)
     }
 
@@ -1508,6 +1563,22 @@ impl Vm {
     /// An INI value as an integer.
     pub fn ini_long(&self, name: &str) -> i64 {
         self.ini.get_long(name)
+    }
+
+    /// `zend.max_allowed_stack_size` and `zend.reserved_stack_size`, as
+    /// [`Vm::ini_long`] reads them. Both are `INI_SYSTEM`, so they are
+    /// read once: an extension that checks its native recursion on every
+    /// call (SPL's methods) paid two lookups by name each time.
+    pub fn stack_size_inis(&mut self) -> (i64, i64) {
+        if let Some(t) = self.stack_size_inis {
+            return t;
+        }
+        let t = (
+            self.ini.get_long("zend.max_allowed_stack_size"),
+            self.ini.get_long("zend.reserved_stack_size"),
+        );
+        self.stack_size_inis = Some(t);
+        t
     }
 
     /// An INI value as a boolean.
@@ -1834,3 +1905,6 @@ mod tests {
         );
     }
 }
+
+/// The entries of [`Vm::method_name_cache`].
+const METHOD_NAME_CACHE: usize = 4;

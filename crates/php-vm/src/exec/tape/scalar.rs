@@ -309,7 +309,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         Op::InstanceOf {
-            class: ClassSpec::Named(_),
+            class:
+                ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
             ..
         } => Inst {
             d: u32::try_from(i).ok()?,
@@ -487,7 +488,12 @@ pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the hit of `instance_of`
 fn is_cached_class(f: &Frame, cv: u32, lit: u32) -> bool {
-    let Some(Value::Object(o)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+    let Some(Value::Object(o)) = f
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    else {
         return false;
     };
     let class = Rc::as_ptr(crate::object::class_of(o));
@@ -508,15 +514,11 @@ unsafe fn instance_of_any(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
     let code = Rc::clone(&f.code);
-    let Some(&Op::InstanceOf {
-        a,
-        class: ClassSpec::Named(lit),
-        dst,
-    }) = code.ops.get(inst.d as usize)
-    else {
+    let Some(Op::InstanceOf { a, class, dst }) = code.ops.get(inst.d as usize) else {
         return false;
     };
-    let Some(r) = hot::instanceof_in(f, &code.literals, a, lit) else {
+    let (a, dst) = (*a, *dst);
+    let Some(r) = hot::instanceof_in(f, &code.literals, a, class) else {
         return false;
     };
     hot::set_tmp_in(f, dst, Value::Bool(r));
@@ -559,7 +561,12 @@ pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
         // An occupied iterator: the generic op.
         return Br::Decline;
     }
-    let Some(Value::Array(a)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+    let Some(Value::Array(a)) = f
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    else {
         // SAFETY: as above.
         return unsafe { fe_reset_any(frame, inst) };
     };
@@ -1046,8 +1053,10 @@ pub(super) unsafe fn jmp_set_tmp(frame: *mut Frame, inst: &Inst) -> Br {
 /// The subject kind of a [`TOp::MatchJ`] row (`k`) that is a literal.
 const MATCH_LIT: u8 = 3;
 
-/// `Op::Match` (`ZEND_MATCH`): the jump the op's table gives the subject
-/// (an int or a string by its key, anything else to the default arm), as
+/// `Op::Match` (`ZEND_MATCH`, and `ZEND_SWITCH_LONG` / `_STRING` for a
+/// `switch` table: another type to the next row): the jump the op's table
+/// gives the subject (an int or a string by its key, anything else to the
+/// default arm), as
 /// the byte offset of its target from this row ([`super::rel`] checked
 /// every target at lowering). 0, nothing changed, for an undefined
 /// variable (the generic op warns) and a reference (dereferenced there).
@@ -1077,7 +1086,16 @@ pub(super) unsafe fn match_jump(frame: *mut Frame, inst: &Inst) -> isize {
     // SAFETY: the caller's contract: the table lives in the op array the
     // frame runs, which outlives the frame's run of its tape.
     let table = unsafe { &*(inst.p as *const crate::opcode::MatchTable) };
-    let to = table.target(v);
+    let to = if table.switch {
+        // A `switch` table: another type goes on to the next row, the
+        // statement's `case` comparisons.
+        match table.switch_target(v) {
+            Some(to) => to,
+            None => return std::mem::size_of::<Inst>() as isize,
+        }
+    } else {
+        table.target(v)
+    };
     (to as isize - inst.d as isize) * std::mem::size_of::<Inst>() as isize
 }
 

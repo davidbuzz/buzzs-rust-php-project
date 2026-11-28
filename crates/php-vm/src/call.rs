@@ -400,7 +400,12 @@ impl Vm {
         }
         // The variable's object is borrowed, not copied: the call takes
         // its own handle (`closure`) from it.
-        match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+        match frame
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
+        {
             Some(Value::Object(o)) => push_closure_user_call_in(&mut frame.calls, o),
             _ => false,
         }
@@ -897,17 +902,27 @@ impl Vm {
 
     fn method_call_on(&mut self, o: &Obj, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
         let scope = self.scope();
-        let lc = if name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            ZStr::from(name.to_ascii_lowercase())
+        // The name lower-cased on the stack (the method tables' keys): a
+        // call `__call()` answers is never cached, so this runs on each one.
+        let mut buf = [0u8; 64];
+        let long;
+        let lc: &[u8] = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            name.as_bytes()
+        } else if let Some(dst) = buf.get_mut(..name.len()) {
+            for (d, s) in dst.iter_mut().zip(name.as_bytes()) {
+                *d = s.to_ascii_lowercase();
+            }
+            dst
         } else {
-            name.clone()
+            long = name.to_ascii_lowercase();
+            long.as_bytes()
         };
         // Only a lookup for the object's own class is cached: the private
         // method rule below depends on it.
         let cacheable = Rc::ptr_eq(cls, object::class_of(o));
         // A private method of the calling scope takes precedence.
         if let Some(s) = &scope {
-            if let Some(m) = s.methods.get(&lc) {
+            if let Some(m) = s.methods.get(lc) {
                 if m.visibility() == flags::PRIVATE
                     && Rc::ptr_eq(&m.scope(), s)
                     && object::class_of(o).is_subclass_of(s)
@@ -923,7 +938,7 @@ impl Vm {
                 }
             }
         }
-        if let Some(m) = cls.methods.get(&lc).cloned() {
+        if let Some(m) = cls.methods.get(lc).cloned() {
             if self.can_access_method(&m, scope.as_ref()) {
                 if cacheable {
                     self.call_bufs.methods.insert(cls, scope.as_ref(), name, &m);
@@ -954,7 +969,7 @@ impl Vm {
                 ),
             ));
         }
-        if let Some(mut c) = self.closure_method_call(o, &lc) {
+        if let Some(mut c) = self.closure_method_call(o, lc) {
             c.magic_name = Some(ZStr::from("__invoke"));
             return Ok(c);
         }
@@ -1595,7 +1610,9 @@ impl Vm {
                                 return Ok(());
                             }
                             ArgSrc::Val(Operand::Tmp(t)) => {
-                                let v = match std::mem::take(&mut frame.tmps[*t as usize]) {
+                                let v = match std::mem::take(
+                                    &mut frame.slots.tmps_mut()[*t as usize],
+                                ) {
                                     Value::Reference(r) => r.get(),
                                     v => v,
                                 };
@@ -1605,8 +1622,11 @@ impl Vm {
                             }
                             ArgSrc::Val(Operand::Cv(cv)) => {
                                 if !frame.symtab_attached {
-                                    if let Some(val) =
-                                        frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)
+                                    if let Some(val) = frame
+                                        .slots
+                                        .cvs()
+                                        .get(*cv as usize)
+                                        .and_then(crate::vm::CvSlot::get)
                                     {
                                         let v = match val {
                                             Value::Reference(r) => r.get(),
@@ -1629,7 +1649,8 @@ impl Vm {
                                 {
                                     if !frame.symtab_attached {
                                         if let Some(val) = frame
-                                            .cvs
+                                            .slots
+                                            .cvs()
                                             .get(cv as usize)
                                             .and_then(crate::vm::CvSlot::get)
                                         {
@@ -1645,7 +1666,9 @@ impl Vm {
                                 }
                             }
                             ArgSrc::CallResult(Operand::Tmp(t)) => {
-                                let v = match std::mem::take(&mut frame.tmps[*t as usize]) {
+                                let v = match std::mem::take(
+                                    &mut frame.slots.tmps_mut()[*t as usize],
+                                ) {
                                     Value::Reference(r) => r.get(),
                                     v => v,
                                 };
@@ -1678,7 +1701,9 @@ impl Vm {
                                 return Ok(());
                             }
                             ArgSrc::Val(Operand::Tmp(t)) => {
-                                let v = match std::mem::take(&mut frame.tmps[*t as usize]) {
+                                let v = match std::mem::take(
+                                    &mut frame.slots.tmps_mut()[*t as usize],
+                                ) {
                                     Value::Reference(r) => r.get(),
                                     v => v,
                                 };
@@ -1687,8 +1712,11 @@ impl Vm {
                             }
                             ArgSrc::Val(Operand::Cv(cv)) => {
                                 if !frame.symtab_attached {
-                                    if let Some(val) =
-                                        frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)
+                                    if let Some(val) = frame
+                                        .slots
+                                        .cvs()
+                                        .get(*cv as usize)
+                                        .and_then(crate::vm::CvSlot::get)
                                     {
                                         let v = match val {
                                             Value::Reference(r) => r.get(),
@@ -1710,7 +1738,8 @@ impl Vm {
                                 {
                                     if !frame.symtab_attached {
                                         if let Some(val) = frame
-                                            .cvs
+                                            .slots
+                                            .cvs()
                                             .get(cv as usize)
                                             .and_then(crate::vm::CvSlot::get)
                                         {
@@ -2014,11 +2043,16 @@ impl Vm {
             return false;
         }
         let arr = match src {
-            Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Operand::Cv(cv) => match f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Array(a)) => a.clone(),
                 _ => return false,
             },
-            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Array(a)) => a.clone(),
                 _ => return false,
             },
@@ -2052,7 +2086,7 @@ impl Vm {
         }
         drop(arr);
         if let Operand::Tmp(t) = src {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -2317,14 +2351,13 @@ impl Vm {
         if self.observer.enabled {
             return false;
         }
-        let live = self.frames.live;
+        let live = self.frames.len();
         // `push_user_call`'s stack-depth backstop is the general path's.
         if live == 0 || live > 50_000 {
             return false;
         }
         let (spare_args, closure) = {
-            let (live_frames, pool) = self.frames.vec.split_at_mut(live);
-            let (Some(caller), Some(frame)) = (live_frames.last_mut(), pool.first_mut()) else {
+            let Some((caller, frame)) = self.frames.both_mut(live) else {
                 return false;
             };
             let caller_strict = caller.code.strict_types;
@@ -2339,17 +2372,27 @@ impl Vm {
             if !simple_ucall(uf, call, n) {
                 return false;
             }
+            // A plain declaration (no static variables, by-reference or
+            // variadic parameter, generator), not returning by reference.
+            let plain_decl =
+                matches!(
+                    uf.call_shape(),
+                    crate::func::CallShape::UNTYPED | crate::func::CallShape::TYPED
+                ) && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
             debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
-            let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
+            let same_func = frame.ufn_addr() == Rc::as_ptr(uf) as usize;
             // `FrameStack::push_in_place`; nothing to ready in a frame the
             // direct return of a call of this same function released
             // (`calls::ready_frame`'s test).
             if same_func && frame.released_direct {
                 debug_assert!(frame.is_released_for(uf));
                 frame.released_direct = false;
-            } else if frame.cvs.len() == code.cv_names.len()
-                && frame.tmps.len() == code.num_tmps as usize
+            } else if frame.released_direct && frame.ready_released_for(uf) {
+                // Released by another function's direct return: the
+                // handles are this function's now (`same_func` below).
+            } else if frame.slots.cvs().len() == code.cv_names.len()
+                && frame.slots.tmps().len() == code.num_tmps as usize
                 && frame.iters.len() == code.num_iters as usize
                 && frame.fins.len() == code.num_finally as usize
             {
@@ -2386,7 +2429,12 @@ impl Vm {
             } else {
                 n.min(uf.params.len().saturating_sub(1))
             };
-            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..bound]) {
+            for (slot, arg) in frame
+                .slots
+                .cvs_mut()
+                .iter_mut()
+                .zip(&mut call.inline_args[..bound])
+            {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
                     drop(old);
@@ -2431,6 +2479,12 @@ impl Vm {
             // (`Frame::released_direct`), as after a prepared call, instead
             // of the full `Frame::clear_for_reuse` and a readying again.
             frame.direct = true;
+            // A plain declaration: its return is the short one
+            // (`Vm::return_plain`), as after a prepared call
+            // (`exec::tape::calls::enter`).
+            // (A closure's object, put in the frame below, is released by
+            // `Frame::release_plain` too.)
+            frame.plain = plain_decl;
             // What is left of the call owns nothing but its function
             // handle: `this`, `scope`, `called`, `closure`, the argument
             // buffer and the named arguments were taken above, the inline
@@ -2448,35 +2502,34 @@ impl Vm {
             // and the length store can panic. Forgetting the rest of the
             // element leaks nothing (see above).
             let func = unsafe { std::ptr::read(&call.func) };
+            // (`ready_released_for` above may have given the frame this
+            // function's handles.)
+            let same_func = same_func
+                || matches!(&func, Func::User(f) if (frame.ufn_addr() == Rc::as_ptr(f) as usize));
             // SAFETY: as above: `call` was the last element and its handle
             // was read out, so the shorter vector never drops it again.
             unsafe { caller.calls.set_len(pending - 1) };
             if same_func {
                 // The frame holds this function already: the call's handle
                 // is released by an inline reference-count decrement (the
-                // frame's `ufunc` holds another, so it is never the last),
+                // frame's `func` holds another, so it is never the last),
                 // where dropping the `Func` was an out-of-line
                 // `drop_in_place::<Func>` call per call.
                 if let Func::User(uf) = func {
                     drop(uf);
                 }
             } else {
-                let ufunc = match &func {
-                    Func::User(uf) => Some(Rc::clone(uf)),
-                    Func::Builtin(_) => None,
-                };
-                set_opt(&mut frame.ufunc, ufunc);
-                set_opt(&mut frame.func, Some(func));
+                drop(frame.set_func(Some(func)));
             }
             (spare, closure)
         };
-        self.frames.live = live + 1;
+        self.frames.enter_pooled(live);
         if let Some(args) = spare_args {
             self.put_arg_vec(args);
         }
         if let Some(c) = closure {
             self.bind_closure_vars(live, &c);
-            self.frames.vec[live].closure = Some(c);
+            self.frames.pooled_at_mut(live).closure = Some(c);
         }
         true
     }
@@ -2531,14 +2584,12 @@ impl Vm {
         if self.observer.enabled {
             return None;
         }
-        let fidx = self.frames.live.checked_sub(1)?;
+        let fidx = self.frames.len().checked_sub(1)?;
         if fidx <= base {
             return None;
         }
         let old = {
-            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
-            let caller = callers.last_mut()?;
-            let frame = rest.first_mut()?;
+            let (caller, frame) = self.frames.both_mut(fidx)?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
@@ -2546,7 +2597,7 @@ impl Vm {
             {
                 return None;
             }
-            let uf = frame.ufunc.as_ref()?;
+            let uf = crate::vm::user_fn(frame.func.as_ref())?;
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
@@ -2559,7 +2610,7 @@ impl Vm {
             // destructor. Every test comes before the value moves out of
             // its slot: `return_generic` reads it there again.
             let dst = match frame.ret {
-                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                RetTarget::Tmp(t) => match caller.slots.tmps_mut().get_mut(t as usize) {
                     Some(slot) => Some(slot),
                     None => return self.return_generic::<false>(val, base, ip),
                 },
@@ -2587,7 +2638,7 @@ impl Vm {
             // `return_generic`'s cases: a second run of every test above.
             let src: Result<&mut Value, Value> = match val {
                 Operand::Cv(cv) => {
-                    let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+                    let Some(slot) = frame.slots.cvs_mut().get_mut(cv as usize) else {
                         return self.return_generic::<false>(val, base, ip);
                     };
                     match slot.get() {
@@ -2622,7 +2673,7 @@ impl Vm {
                         _ => return self.return_generic::<false>(val, base, ip),
                     }
                 }
-                Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
+                Operand::Tmp(t) => match frame.slots.tmps_mut().get_mut(t as usize) {
                     Some(slot)
                         if !matches!(slot, Value::Reference(_))
                             && (dst.is_some() || !may_destruct(slot))
@@ -2716,6 +2767,162 @@ impl Vm {
         Some(crate::exec::Flow::Reload)
     }
 
+    /// `ZEND_RETURN` from a plain call's frame ([`Frame::plain`]: a call
+    /// plan's, or any prepared call of a plain declaration), tried by the
+    /// tape before [`Vm::return_simple`]: the value moved or copied into
+    /// the caller's temporary as `return_simple` moves it (a declared
+    /// return type must take it as it is; an unused result is released,
+    /// unless that may run a destructor), then the frame released in one
+    /// pass ([`Frame::release_plain`]: slots, a method's `$this` and
+    /// scopes, the call's fields) and popped. What `return_simple` tests
+    /// about the frame on every return (its kind, generator, by-reference
+    /// return, the function it keeps) is what the mark says.
+    /// The base frame of the nested execution `Vm::run_base_on_tape`
+    /// runs (`Vm::tape_base`) returns here too: its value goes to
+    /// `Vm::tape_base_value`, and the stack is left at `base`.
+    /// `false`, nothing changed, for a frame, a value or a result slot it
+    /// leaves to `return_simple`.
+    #[inline(never)]
+    pub(crate) fn return_plain<const AT_BASE: bool>(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> bool {
+        let Some(fidx) = self.frames.len().checked_sub(1) else {
+            return false;
+        };
+        // `AT_BASE`: the base frame of the nested execution
+        // `Vm::run_base_on_tape` runs on the tape (a method native code
+        // called: `offsetGet()`, `__toString()`, ...), whose value is the
+        // execution's result, left in `tape_base_value` (`return_at_base`'s
+        // `Flow::Done`). A parameter of the type, so the ordinary return
+        // compiles to the tests it had before.
+        let at_base = AT_BASE;
+        let placed = if at_base {
+            fidx == base && fidx > 0 && self.tape_base == base + 1
+        } else {
+            fidx > base
+        };
+        if !placed || self.observer.enabled {
+            return false;
+        }
+        // (Split by hand, as in the planned call: see
+        // `FrameStack::split_pooled_mut`.)
+        let (callers, rest) = self.frames.split_pooled_mut(fidx);
+        let (Some(caller), Some(frame)) = (
+            callers.last_mut().map(|f| &mut **f),
+            rest.first_mut().map(|f| &mut **f),
+        ) else {
+            return false;
+        };
+        if !frame.plain_releasable() {
+            return false;
+        }
+        // The caller's result slot (a scalar there owns nothing and is
+        // overwritten), or none for an unused result.
+        let mut dst = if at_base {
+            Some(&mut self.tape_base_value)
+        } else {
+            match frame.ret {
+                RetTarget::Tmp(t) => match caller.slots.tmps_mut().get_mut(t as usize) {
+                    Some(slot) if is_scalar(slot) => Some(slot),
+                    _ => return false,
+                },
+                RetTarget::Discard => None,
+            }
+        };
+        // The declared return type must take the value as it is
+        // (`return_simple`'s rule); anything else is its to coerce or
+        // refuse.
+        let rt =
+            crate::vm::ufn_of(frame.func.as_ref(), frame.ufn).and_then(|u| u.return_type.as_ref());
+        // (The scopes are read only for a declared type.)
+        let (in_scope, late_bound) = (&frame.scope, &frame.called);
+        let takes = |v: &Value| {
+            rt.is_none() || return_accepts_in(rt, v, in_scope.as_ref(), late_bound.as_ref())
+        };
+        match val {
+            Operand::Tmp(s) => match frame.slots.tmps_mut().get_mut(s as usize) {
+                // (An unused result whose release may run a destructor is
+                // `return_generic`'s.)
+                Some(slot)
+                    if !matches!(slot, Value::Reference(_))
+                        && takes(slot)
+                        && (dst.is_some() || !may_destruct(slot)) =>
+                {
+                    match dst.as_deref_mut() {
+                        Some(d) => std::mem::swap(d, slot),
+                        None => {
+                            let v = std::mem::take(slot);
+                            if is_scalar(&v) {
+                                std::mem::forget(v);
+                            } else {
+                                drop(v);
+                            }
+                        }
+                    }
+                }
+                _ => return false,
+            },
+            Operand::Cv(cv) => {
+                let Some(slot) = frame.slots.cvs_mut().get_mut(cv as usize) else {
+                    return false;
+                };
+                match (slot.as_mut(), dst.as_deref_mut()) {
+                    (Some(v), Some(d)) if returns_directly(v) && takes(v) => std::mem::swap(d, v),
+                    (Some(v @ (Value::Array(_) | Value::Object(_))), Some(d)) if takes(v) => {
+                        let copy = clone_value(v);
+                        std::mem::forget(std::mem::replace(d, copy));
+                    }
+                    // Unused: the value stays in its variable, released
+                    // with the frame's.
+                    (Some(v), None) if !matches!(v, Value::Reference(_)) && takes(v) => {}
+                    _ => return false,
+                }
+            }
+            Operand::Lit(l) => match frame.code.literals.get(l as usize) {
+                Some(lit) if !matches!(lit, Value::Reference(_)) && takes(lit) => {
+                    if let Some(d) = dst.as_deref_mut() {
+                        std::mem::forget(std::mem::replace(d, clone_value(lit)));
+                    }
+                }
+                _ => return false,
+            },
+            Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => {
+                if let Some(d) = dst.as_deref_mut() {
+                    std::mem::forget(std::mem::replace(d, Value::Null));
+                }
+            }
+            _ => return false,
+        }
+        // `SAVE_OPLINE()`: the release below may report this line.
+        frame.ip = ip;
+        frame.release_plain(caller.this.as_ref());
+        self.frames.pop_cleared_top();
+        true
+    }
+
+    /// [`Vm::return_plain`] of the base frame of a nested execution that
+    /// `Vm::run` runs (its `Return` arm): a method native code called
+    /// whose body the tape does not enter (`tape::worth_entering`: a
+    /// destructor's one assignment, ...). The execution's result, or
+    /// `None`, nothing changed, for a frame `return_at_base` is to return.
+    pub(crate) fn return_plain_base(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<Value> {
+        if self.frames.len() != base + 1 || !self.frames.last().is_some_and(|f| f.plain) {
+            return None;
+        }
+        let outer = std::mem::replace(&mut self.tape_base, base + 1);
+        let done = self.return_plain::<true>(val, base, ip);
+        self.tape_base = outer;
+        done.then(|| std::mem::take(&mut self.tape_base_value))
+    }
+
     /// `ZEND_RETURN` from the frame a nested execution started with
     /// (`base`: a callback called by a builtin, `zend_call_function`):
     /// [`Vm::return_generic`]'s direct return, whose result is the
@@ -2750,14 +2957,12 @@ impl Vm {
         if self.observer.enabled {
             return None;
         }
-        let fidx = self.frames.live.checked_sub(1)?;
+        let fidx = self.frames.len().checked_sub(1)?;
         if fidx < base || (fidx == base) != at_base || fidx == 0 {
             return None;
         }
         let (v, ret) = {
-            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
-            let caller = callers.last_mut()?;
-            let frame = rest.first_mut()?;
+            let (caller, frame) = self.frames.both_mut(fidx)?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
@@ -2765,7 +2970,7 @@ impl Vm {
             {
                 return None;
             }
-            let uf = frame.ufunc.as_ref()?;
+            let uf = crate::vm::user_fn(frame.func.as_ref())?;
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
@@ -2775,7 +2980,7 @@ impl Vm {
             // out-of-line call per return.
             let v = match val {
                 Operand::Cv(cv) => {
-                    let slot = frame.cvs.get_mut(cv as usize)?.as_mut();
+                    let slot = frame.slots.cvs_mut().get_mut(cv as usize)?.as_mut();
                     match slot.as_ref()? {
                         Value::Reference(r) => {
                             let v = r.get();
@@ -2809,7 +3014,7 @@ impl Vm {
                     }
                 }
                 Operand::Tmp(t) => {
-                    let slot = frame.tmps.get_mut(t as usize)?;
+                    let slot = frame.slots.tmps_mut().get_mut(t as usize)?;
                     if matches!(slot, Value::Reference(_))
                         || !return_accepts_in(rt, slot, scope, called)
                     {
@@ -2877,7 +3082,7 @@ impl Vm {
                 (_, None) => None,
                 // The execution's result: no caller slot.
                 (_, v) if at_base => v,
-                (RetTarget::Tmp(t), Some(v)) => match caller.tmps.get_mut(t as usize) {
+                (RetTarget::Tmp(t), Some(v)) => match caller.slots.tmps_mut().get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
                         None
@@ -3229,7 +3434,7 @@ impl Vm {
             f.args.resize(passed_argc, None);
 
             for i in 0..passed_argc {
-                if let Some(slot) = f.cvs.get_mut(i) {
+                if let Some(slot) = f.slots.cvs_mut().get_mut(i) {
                     slot.set(inline_args[i].take());
                 }
             }
@@ -3245,8 +3450,7 @@ impl Vm {
                 }
             }
             f.ip = first_op;
-            f.func = Some(Func::User(uf.clone()));
-            f.ufunc = Some(uf);
+            drop(f.set_func(Some(Func::User(uf.clone()))));
 
             // A closure (e.g. an arrow function passed to `array_map`)
             // binds its captured variables after the arguments, as below.
@@ -3287,7 +3491,7 @@ impl Vm {
                             None => true,
                             Some(ty) => ty.is_mixed() || accepts_without_coercion(ty.mask, &v),
                         };
-                        if let Some(slot) = f.cvs.get_mut(i) {
+                        if let Some(slot) = f.slots.cvs_mut().get_mut(i) {
                             slot.set(Some(v));
                         }
                         bound_count = i + 1;
@@ -3343,8 +3547,7 @@ impl Vm {
                 f.ip = init_cvs(&uf, f);
                 Some(spare)
             };
-            f.func = Some(Func::User(uf.clone()));
-            f.ufunc = Some(uf);
+            drop(f.set_func(Some(Func::User(uf.clone()))));
             spare
         };
         if let Some(spare) = spare_args {
@@ -3493,7 +3696,7 @@ impl Vm {
         // A pooled record, taken whole for the call
         // (`CallBufs::take_args`).
         let mut args = self.call_bufs.take_args();
-        let live = self.frames.live;
+        let live = self.frames.len();
         let spare = {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
             if !frame.args.is_empty() {
@@ -3526,7 +3729,7 @@ impl Vm {
             set_opt(&mut frame.scope, None);
             set_opt(&mut frame.called, None);
             set_opt(&mut frame.magic_name, None);
-            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            drop(frame.set_func(Some(Func::Builtin(Rc::clone(b)))));
             set_opt(&mut frame.builtin_name, Some(b.name.clone()));
             frame.observer_hidden = false;
             spare
@@ -3567,7 +3770,7 @@ impl Vm {
         args.release_in_place();
         self.call_bufs.put_args(args);
         // Released by the handler, destructed while its frame is current.
-        if object::has_pending_destructors() && self.frames.live == live + 1 {
+        if object::has_pending_destructors() && self.frames.len() == live + 1 {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {
                     (Ok(_), e) => Err(e),
@@ -3579,12 +3782,170 @@ impl Vm {
                 };
             }
         }
-        if self.frames.live == live + 1 && self.frames.vec[live].release_native(&self.empty_vars) {
+        if self.frames.len() == live + 1
+            && self
+                .frames
+                .pooled_at_mut(live)
+                .release_native(&self.empty_vars)
+        {
             self.frames.pop_cleared_top();
         } else {
             self.pop_frames_to(live + 1);
         }
         Some(r)
+    }
+
+    /// An internal method called from native code (`zend_call_method`:
+    /// `FilterIterator::valid()` for a `foreach`, an inner iterator's
+    /// `next()`, ...), as [`Vm::call_builtin_pooled`] calls a function: the
+    /// pooled builtin frame above the current one takes `$this`, the
+    /// method's scope and the object's class and the arguments, the handler
+    /// gets copies of them and the declared defaults of the omitted
+    /// parameters, and the frame is released by [`Vm::pop_frames_to`]
+    /// (`Frame::release_native_call`). The general way there
+    /// (`pending_for_method`, `call_pending_ex`, `call_builtin_framed`,
+    /// `call_builtin_impl`) built and moved a pending call and tested each
+    /// argument field by field: ~1,000 instructions a call.
+    ///
+    /// It applies with no observer, to a non-static method that is neither
+    /// deprecated nor `#[\NoDiscard]`, whose builtin makes a plain call
+    /// ([`Builtin::plain_call_upto`]), given at least its required
+    /// arguments and none past its parameters, each a value its parameter
+    /// takes as it is (no by-reference parameter among them), and that has
+    /// no frameless form for them. `Err` gives the arguments back,
+    /// nothing changed, otherwise.
+    #[inline(never)]
+    fn call_builtin_method_native(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        b: &Rc<Builtin>,
+        mut args: Vec<Value>,
+    ) -> Result<VmResult<Value>, Vec<Value>> {
+        if self.observer.enabled
+            || m.is_static()
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+        {
+            return Err(args);
+        }
+        let n = args.len();
+        let (kind, upto) = b.plain_call_upto();
+        if kind != crate::func::PlainCall::Named || n > upto {
+            return Err(args);
+        }
+        let sig = b.signature();
+        let nparams = sig.params.len();
+        let variadic = b.flags & flags::VARIADIC != 0;
+        if n < sig.required as usize || (!variadic && n > nparams) {
+            return Err(args);
+        }
+        // By-value arguments are passed dereferenced (`call_pending_ex`).
+        for a in &mut args {
+            if let Value::Reference(r) = a {
+                let v = r.get();
+                *a = v;
+            }
+        }
+        let table = b.accepts();
+        let last = table.last().copied().unwrap_or(u32::MAX);
+        if !args
+            .iter()
+            .enumerate()
+            .all(|(i, v)| crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0)
+        {
+            return Err(args);
+        }
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class != 0 {
+            let sent: Vec<Option<Value>> = args.iter().cloned().map(Some).collect();
+            if crate::special::frameless_args(class, &sent) {
+                return Err(args);
+            }
+        }
+        // `zend_call_function` services pending interrupts before the call.
+        if let Err(t) = self.check_interrupt() {
+            return Ok(Err(t));
+        }
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        let mut hargs = self.call_bufs.take_args();
+        let live = self.frames.len();
+        {
+            let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
+            if !frame.args.is_empty() {
+                frame.args.clear();
+            }
+            hargs.values.extend(args.iter().map(crate::func::copy_arg));
+            frame.args.extend(args.drain(..).map(Some));
+            if !frame.named().is_empty() {
+                frame.cold_mut().named.clear();
+            }
+            set_opt(&mut frame.this, Some(o.clone()));
+            set_opt(&mut frame.closure, None);
+            set_opt(&mut frame.scope, Some(m.scope()));
+            set_opt(&mut frame.called, Some(Rc::clone(object::class_of(o))));
+            set_opt(&mut frame.magic_name, None);
+            drop(frame.set_func(Some(Func::Builtin(Rc::clone(b)))));
+            set_opt(&mut frame.builtin_name, Some(b.name.clone()));
+            frame.observer_hidden = false;
+        }
+        if args.capacity() > 0 {
+            drop(args);
+        }
+        let given = hargs.values.len();
+        hargs.passed.resize(given, true);
+        let upto = if variadic {
+            nparams.saturating_sub(1)
+        } else {
+            nparams
+        };
+        while hargs.values.len() < upto {
+            let i = hargs.values.len();
+            match self.builtin_default(b, i) {
+                Some(d) if i >= sig.required as usize => {
+                    hargs.values.push(d);
+                    hargs.passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        hargs.this = Some(o.clone());
+        hargs.called = Some(Rc::clone(object::class_of(o)));
+        self.pending_call_dst = None;
+        self.magic_call_name = None;
+        hargs.func = Some(Rc::clone(b));
+        let mut r = (b.handler)(self, &mut hargs);
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        hargs.release_in_place();
+        self.call_bufs.put_args(hargs);
+        if object::has_pending_destructors() && self.frames.len() == live + 1 {
+            if let Err(e) = self.run_pending_destructors() {
+                r = match (r, e) {
+                    (Ok(_), e) => Err(e),
+                    (Err(Throw::Exception(old)), Throw::Exception(new)) => {
+                        crate::exceptions::chain_previous(&new, &old);
+                        Err(Throw::Exception(new))
+                    }
+                    (Err(old), _) => Err(old),
+                };
+            }
+        }
+        if let Some(f) = self.frames.get(live) {
+            root_released_args(&f.args);
+        }
+        self.pop_frames_to(live + 1);
+        Ok(match r {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
     }
 
     /// [`Vm::call_builtin`] after its [`Vm::fast_builtin_call`] attempt
@@ -3653,11 +4014,8 @@ impl Vm {
             return None;
         }
         let id = b.fast_eval_id();
-        let live = self.frames.live;
-        let (callers, pool) = self.frames.vec.split_at_mut(live);
-        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-            return None;
-        };
+        let live = self.frames.len();
+        let (caller, frame) = self.frames.both_mut(live)?;
         if caller.calls.len() != calls_len || frame.args.len() != 1 {
             return None;
         }
@@ -4662,8 +5020,16 @@ impl Vm {
             if self.frames.len() > depth {
                 self.frames.truncate(depth);
             }
-            self.frames
-                .release_builtin_top(&self.empty_code, &self.empty_vars);
+            let released = self
+                .frames
+                .pooled_mut(depth - 1)
+                .is_some_and(|f| f.release_native_call(&self.empty_vars));
+            if released {
+                self.frames.leave_released();
+            } else {
+                self.frames
+                    .release_builtin_top(&self.empty_code, &self.empty_vars);
+            }
             // The arguments are released once the frame is, and the
             // pooled frame keeps the buffer: the next builtin call readied
             // in it pushes its arguments there
@@ -4674,7 +5040,7 @@ impl Vm {
             // application).
             if args.capacity() <= 256 {
                 args.clear();
-                if let Some(frame) = self.frames.vec.get_mut(depth - 1) {
+                if let Some(frame) = self.frames.pooled_mut(depth - 1) {
                     frame.args = args;
                 }
             }
@@ -4753,7 +5119,7 @@ impl Vm {
     fn recv_type_error(&mut self, n: u32, v: &Value) -> Throw {
         let f = self.frame();
         let func = f.func.clone();
-        let uf = f.ufunc.clone();
+        let uf = f.ufunc().cloned();
         let scope = f.scope.clone();
         let called = f.called.clone();
         let internal = f.called_from_internal;
@@ -4832,7 +5198,7 @@ impl Vm {
         // Fast path: untyped parameter, or a value accepted as-is.
         {
             let f = self.frame();
-            let uf = f.ufunc.as_ref().expect("user frame");
+            let uf = f.ufunc().expect("user frame");
             let p = uf.params.get(n as usize).or_else(|| uf.params.last());
             match p.and_then(|p| p.ty.as_ref()) {
                 None => return Ok(v),
@@ -4864,7 +5230,7 @@ impl Vm {
         // function's `Rc` keeps it alive while the check runs user code (a
         // `__toString()` of a coerced argument), so only that handle is
         // cloned, not the declaration with its class names.
-        let uf = self.frame().ufunc.clone().expect("user frame");
+        let uf = self.frame().ufunc().cloned().expect("user frame");
         let p = uf.params.get(n as usize).or_else(|| uf.params.last());
         let Some(ty) = p.and_then(|p| p.ty.as_ref()) else {
             return Ok(true);
@@ -4888,10 +5254,10 @@ impl Vm {
         let idx = {
             let f = self.frame();
             let idx = cv as usize;
-            let Some(v) = f.cvs.get(idx).and_then(crate::vm::CvSlot::get) else {
+            let Some(v) = f.slots.cvs().get(idx).and_then(crate::vm::CvSlot::get) else {
                 return Ok(false);
             };
-            let uf = f.ufunc.as_ref().expect("user frame");
+            let uf = f.ufunc().expect("user frame");
             let p = uf.params.get(n as usize).or_else(|| uf.params.last());
             match p.and_then(|p| p.ty.as_ref()) {
                 None => return Ok(true),
@@ -4910,18 +5276,23 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn recv_bound_slow(&mut self, n: u32, idx: usize) -> VmResult<bool> {
-        let taken = self.frame_mut().cvs.get_mut(idx).and_then(|c| c.set(None));
+        let taken = self
+            .frame_mut()
+            .slots
+            .cvs_mut()
+            .get_mut(idx)
+            .and_then(|c| c.set(None));
         let Some(mut v) = taken else {
             return Ok(false);
         };
         let accepted = self.recv_verify(n, &mut v)?;
         if accepted {
-            self.frame_mut().cvs[idx].set(Some(v));
+            self.frame_mut().slots.cvs_mut()[idx].set(Some(v));
             return Ok(true);
         }
         // php-src's CV holds the rejected value: the TypeError's trace
         // shows it.
-        self.frame_mut().cvs[idx].set(Some(v.clone()));
+        self.frame_mut().slots.cvs_mut()[idx].set(Some(v.clone()));
         Err(self.recv_type_error(n, &v))
     }
 
@@ -4933,8 +5304,8 @@ impl Vm {
             if slot.is_none() {
                 // Bound by init_cvs
                 let c_idx = cv as usize;
-                if let Some(v) = f.cvs.get(c_idx).and_then(crate::vm::CvSlot::get) {
-                    if let Some(uf) = &f.ufunc {
+                if let Some(v) = f.slots.cvs().get(c_idx).and_then(crate::vm::CvSlot::get) {
+                    if let Some(uf) = f.ufunc() {
                         let p = uf.params.get(n_idx).or_else(|| uf.params.last());
                         match p.and_then(|p| p.ty.as_ref()) {
                             None => return Ok(()),
@@ -4973,7 +5344,7 @@ impl Vm {
 
     fn missing_arg_error(&mut self, n: u32) -> Throw {
         let f = self.frame();
-        let uf = f.ufunc.clone().expect("user frame");
+        let uf = f.ufunc().cloned().expect("user frame");
         let func = f.func.clone().expect("func");
         let scope = f.scope.clone();
         let passed = f.num_args();
@@ -5032,8 +5403,8 @@ impl Vm {
             if slot.is_none() {
                 // Bound by init_cvs, or a named-argument gap (default).
                 let c_idx = cv as usize;
-                if let Some(v) = f.cvs.get(c_idx).and_then(crate::vm::CvSlot::get) {
-                    if let Some(uf) = &f.ufunc {
+                if let Some(v) = f.slots.cvs().get(c_idx).and_then(crate::vm::CvSlot::get) {
+                    if let Some(uf) = f.ufunc() {
                         let p = uf.params.get(n_idx).or_else(|| uf.params.last());
                         match p.and_then(|p| p.ty.as_ref()) {
                             None => return Ok(true),
@@ -5095,21 +5466,36 @@ impl Vm {
         let Some(f) = self.frames.last() else {
             return false;
         };
-        let Some(uf) = f.ufunc.as_ref() else {
+        let Some(uf) = f.ufunc() else {
             return false;
         };
-        if !f.named().is_empty()
-            || uf
-                .params
-                .get(n as usize)
-                .is_none_or(|p| !p.variadic || p.ty.as_ref().is_some_and(|t| !t.is_mixed()))
-        {
+        let Some(p) = uf.params.get(n as usize) else {
+            return false;
+        };
+        if !f.named().is_empty() || !p.variadic {
             return false;
         }
-        let mut arr = HashTable::new();
-        for v in f.args.iter().skip(n as usize).flatten() {
-            let _ = arr.push(v.clone());
+        let extra = f.args.iter().skip(n as usize).flatten();
+        // A typed variadic parameter (`string ...$ids`): each argument
+        // its type takes as it is (no coercion, so the same value in
+        // strict and coercive mode); anything else is the generic op's to
+        // coerce or refuse.
+        if let Some(t) = p.ty.as_ref().filter(|t| !t.is_mixed()) {
+            if !extra
+                .clone()
+                .all(|v| !v.is_reference() && accepts_without_coercion(t.mask, v))
+            {
+                return false;
+            }
         }
+        // The list built in one step (`ZEND_HASH_FILL_PACKED`, sized for
+        // the arguments).
+        let count = f.args.len().saturating_sub(n as usize);
+        let arr = if count == 0 {
+            HashTable::new()
+        } else {
+            HashTable::from_list_sized(count, extra.cloned())
+        };
         self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
         true
     }
@@ -5120,7 +5506,7 @@ impl Vm {
         // (skips building the function/type display strings).
         {
             let f = self.frame();
-            let Some(uf) = &f.ufunc else {
+            let Some(uf) = f.ufunc() else {
                 return Ok(v.unwrap_or_default());
             };
             match (&uf.return_type, &v) {
@@ -5141,7 +5527,7 @@ impl Vm {
         // the function's `Rc` keeps it alive while the check runs user code
         // (a `__toString()` of a coerced value), so only that handle is
         // cloned, not the declaration with its class names.
-        let Some(uf) = self.frame().ufunc.clone() else {
+        let Some(uf) = self.frame().ufunc().cloned() else {
             return Ok(v.unwrap_or_default());
         };
         let Some(rt) = uf.return_type.as_ref() else {
@@ -5597,7 +5983,11 @@ impl Vm {
             && template.pfa.is_none()
             && template.magic_name.is_none()
             && match &template.func {
-                Func::User(uf) => !uf.params.iter().any(|p| p.by_ref),
+                // (A plain declaration has no by-reference parameter.)
+                Func::User(uf) => {
+                    uf.call_shape() > crate::func::CallShape::NOT_PLAIN
+                        || !uf.params.iter().any(|p| p.by_ref)
+                }
                 Func::Builtin(_) => false,
             };
         if !inline {
@@ -5679,28 +6069,60 @@ impl Vm {
             return None;
         };
         let n = args.len();
+        // A plain declaration ([`crate::func::CallShape`], cached) is none
+        // of what the other tests below look for.
+        let shape = uf.call_shape();
+        let plain = shape > crate::func::CallShape::NOT_PLAIN;
         if template.is_ctor
-            || uf.flags & flags::DEPRECATED != 0
-            || uf.is_generator()
-            || uf.code.num_statics != 0
-            || uf.code.num_finally != 0
             || self.has_observers()
             || n < uf.required as usize
             || n > uf.params.len()
             || self.frames.len() > 50_000
-            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+            || (!plain
+                && (uf.flags & flags::DEPRECATED != 0
+                    || uf.is_generator()
+                    || uf.code.num_statics != 0
+                    || uf.code.num_finally != 0
+                    || uf.params.iter().any(|p| p.variadic || p.by_ref)))
         {
             return None;
         }
-        for (p, v) in uf.params.iter().zip(args.iter()) {
-            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+        if shape == crate::func::CallShape::UNTYPED {
+            // (No parameter's type to pass: `mixed` or none.)
+            if args.iter().any(Value::is_reference) {
                 return None;
+            }
+        } else {
+            for (p, v) in uf.params.iter().zip(args.iter()) {
+                if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+                    return None;
+                }
             }
         }
         if let Err(e) = self.check_interrupt() {
             return Some(Err(e));
         }
         let uf = Rc::clone(uf);
+        // A plain declaration: the pooled frame readied in one pass,
+        // entered directly and returned plainly
+        // (`calls::push_callback_from_native`).
+        if plain {
+            if let Some(base) = crate::exec::tape::calls::push_callback_from_native(
+                self,
+                &uf,
+                template.this.as_ref(),
+                template.scope.as_ref(),
+                template.called.as_ref(),
+                template.closure.as_ref(),
+                template.strict,
+                args,
+            ) {
+                return Some(match self.execute(base) {
+                    Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+                    r => r,
+                });
+            }
+        }
         let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
         let frame = &mut self.frames[idx];
         frame.this.clone_from(&template.this);
@@ -5713,7 +6135,7 @@ impl Vm {
         frame.args.clear();
         frame.args.resize(n, None);
         for (i, v) in args.iter_mut().enumerate() {
-            if let Some(slot) = frame.cvs.get_mut(i) {
+            if let Some(slot) = frame.slots.cvs_mut().get_mut(i) {
                 slot.set(Some(std::mem::take(v)));
             }
         }
@@ -5728,8 +6150,7 @@ impl Vm {
             }
         }
         frame.ip = first_op;
-        frame.func = Some(Func::User(Rc::clone(&uf)));
-        frame.ufunc = Some(uf);
+        drop(frame.set_func(Some(Func::User(Rc::clone(&uf)))));
         if let Some(c) = &template.closure {
             self.bind_closure_vars(idx, c);
             self.frames[idx].closure = Some(c.clone());
@@ -5885,6 +6306,13 @@ impl Vm {
     ) -> VmResult<Value> {
         if let Some(r) = self.enter_method_direct(o, m, &mut args) {
             return r;
+        }
+        if let Func::Builtin(b) = &m.func {
+            let b = Rc::clone(b);
+            match self.call_builtin_method_native(o, m, &b, args) {
+                Ok(r) => return r,
+                Err(back) => args = back,
+            }
         }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         self.give_args(&mut call, args);
@@ -6063,7 +6491,7 @@ fn takes_args_inline(call: &PendingCall) -> bool {
 /// The method `name` of `cls`, looked up by its lower-case name: a name of
 /// up to 64 bytes is lowered on the stack (`offsetGet`, `getIterator`:
 /// the engine's own calls), a longer one in a heap buffer.
-fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
+pub(crate) fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
     let b = name.as_bytes();
     if !b.iter().any(u8::is_ascii_uppercase) {
         return cls.methods.get(b).cloned();
@@ -6258,12 +6686,32 @@ fn object_accepts(
         return false;
     }
     let cls = object::class_of(o);
-    if rt.mask & crate::types::mask::STATIC != 0 && called.is_some_and(|c| cls.is_subclass_of(c)) {
+    // A type with `static` depends on the call's called class: decided
+    // each time. Any other takes the class of the last object it took by
+    // one of its names: one address to compare.
+    let has_static = rt.mask & crate::types::mask::STATIC != 0;
+    if has_static {
+        if called.is_some_and(|c| cls.is_subclass_of(c)) {
+            return true;
+        }
+    } else if rt.alias_class_is(cls) {
+        return true;
+    }
+    // Only a match by a name the type lists is learned: one through
+    // `self` or `parent` depends on the call's scope, which differs for a
+    // trait's method in each class using it, or a rebound closure.
+    if refs.classes.iter().any(|c| match c {
+        crate::types::ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        _ => false,
+    }) {
+        if !has_static {
+            rt.learn_class(cls);
+        }
         return true;
     }
     let named = |c: &Rc<Class>| Rc::ptr_eq(&cls, c) || cls.instance_of_name(c.lc_name.as_bytes());
     refs.classes.iter().any(|c| match c {
-        crate::types::ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        crate::types::ClassRef::Named(_) => false,
         crate::types::ClassRef::Scope => scope.is_some_and(named),
         crate::types::ClassRef::Parent => scope.and_then(|s| s.parent.as_ref()).is_some_and(named),
     })
@@ -6547,12 +6995,17 @@ pub(crate) fn init_relative_static_in(
 pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slot: usize) -> bool {
     let o = match obj {
         Operand::Cv(cv) if !frame.symtab_attached => {
-            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            match frame
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Object(o)) => o,
                 _ => return false,
             }
         }
-        Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+        Operand::Tmp(t) => match frame.slots.tmps().get(t as usize) {
             Some(Value::Object(o)) => o,
             _ => return false,
         },
@@ -6584,7 +7037,12 @@ pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slo
     // it goes there, its destructor left to the safe point after the
     // instruction).
     let (this, released) = match obj {
-        Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
+        Operand::Tmp(t) => match frame
+            .slots
+            .tmps_mut()
+            .get_mut(t as usize)
+            .map(std::mem::take)
+        {
             Some(Value::Object(held)) if !is_static => (Some(held), None),
             other => (None, other),
         },
@@ -6835,7 +7293,7 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
             return true;
         }
         ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
-            let Some(slot) = frame.tmps.get_mut(*t as usize) else {
+            let Some(slot) = frame.slots.tmps_mut().get_mut(*t as usize) else {
                 return false;
             };
             let v = match std::mem::take(slot) {
@@ -6867,7 +7325,12 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
     if frame.symtab_attached {
         return false;
     }
-    let v = match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+    let v = match frame
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    {
         Some(Value::Reference(r)) => r.get(),
         Some(v) => clone_value(v),
         None => return false,
@@ -7060,7 +7523,7 @@ fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
                     None => true,
                     Some(ty) => ty.is_mixed() || accepts_without_coercion(ty.mask, &v),
                 };
-                if let Some(slot) = f.cvs.get_mut(i) {
+                if let Some(slot) = f.slots.cvs_mut().get_mut(i) {
                     slot.set(Some(v));
                 }
                 if skipping && ok {
@@ -7134,6 +7597,11 @@ pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
     match v {
         Value::Object(o) if ty.intersections.is_empty() => {
             let class = object::class_of(o);
+            // The class of the last object this type took: one address to
+            // compare.
+            if !ty.classes.is_empty() && ty.alias_class_is(class) {
+                return true;
+            }
             // A closure for `callable`: nothing to resolve.
             if ty.mask & crate::types::mask::CALLABLE != 0
                 && crate::typecheck::is_closure_class(class)
@@ -7142,10 +7610,14 @@ pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
             }
             // The names lower-cased as the class table keys them
             // (`TypeDecl::classes` keeps them as written).
-            ty.class_refs().classes.iter().any(|c| match c {
+            let named = ty.class_refs().classes.iter().any(|c| match c {
                 crate::types::ClassRef::Named(lc) => class.instance_of_name(lc.as_bytes()),
                 crate::types::ClassRef::Scope | crate::types::ClassRef::Parent => false,
-            }) || (!ty.classes.is_empty() && ty.alias_class_is(class))
+            });
+            if named {
+                ty.learn_class(class);
+            }
+            named
         }
         _ => false,
     }
@@ -7598,7 +8070,9 @@ impl Vm {
             other => {
                 // `FREE_OP2`: a temporary length is released unread.
                 if let Operand::Tmp(t) = len {
-                    drop(std::mem::take(&mut self.frame_mut().tmps[t as usize]));
+                    drop(std::mem::take(
+                        &mut self.frame_mut().slots.tmps_mut()[t as usize],
+                    ));
                 }
                 return Err(self.make_throw(
                     "TypeError",
@@ -7968,7 +8442,7 @@ mod buffer_tests {
     /// the pool's buffers (`before` are the pool's capacities then): the
     /// pooled frame keeps that buffer, emptied, and the pool has the rest.
     fn assert_kept_buffer(vm: &Vm, before: &[usize]) {
-        let kept = &vm.frames.vec[0].args;
+        let kept = &vm.frames.pooled_at(0).args;
         assert!(kept.is_empty());
         assert_eq!(kept.capacity(), 8);
         assert_eq!(capacities(vm), before[1..]);
@@ -8045,7 +8519,9 @@ restore_error_handler();
         );
         frame.args = vm.call_bufs.args.pop().expect("prewarmed buffer");
         frame.args.push(Some(Value::Str(arg.clone())));
-        frame.tmps.push(Value::Str(tmp.clone()));
+        frame
+            .slots
+            .edit_tmps_storage(|t| t.push(Value::Str(tmp.clone())));
         vm.frames.push(frame);
         let depth = vm.frames.len();
         vm.pop_frames_to(depth);

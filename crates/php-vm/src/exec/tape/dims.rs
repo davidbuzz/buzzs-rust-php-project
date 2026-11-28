@@ -777,9 +777,10 @@ pub(super) unsafe fn fetch_dim_key(frame: *mut Frame, inst: &Inst) -> Br {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `fetch_dim_key`
 fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
+    let (cvs, tmps) = f.slots.split_mut();
     if inst.d != NO_TO
         || !matches!(
-            f.tmps.get(inst.p),
+            tmps.get(inst.p),
             Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
         )
     {
@@ -787,14 +788,14 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     }
     let kind = dim_kind(inst);
     let key = match kind {
-        KIND_TMP => f.tmps.get(inst.b as usize),
-        KIND_CV => f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+        KIND_TMP => tmps.get(inst.b as usize),
+        KIND_CV => cvs.get(inst.b as usize).and_then(CvSlot::get),
         _ => return false,
     };
     let Some(Value::Str(key)) = key else {
         return false;
     };
-    let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
+    let Some(Value::Array(arr)) = cvs.get(inst.a as usize).and_then(CvSlot::get) else {
         return false;
     };
     let found = if ArrayKey::surely_str(key.as_bytes()) {
@@ -812,7 +813,7 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     if !found.is_plain() {
         return false;
     }
-    let Some(slot) = f.tmps.get_mut(inst.p) else {
+    let Some(slot) = tmps.get_mut(inst.p) else {
         return false;
     };
     // The slot holds a scalar (seen above): nothing to release.
@@ -834,7 +835,7 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
         }
     }
     if kind == KIND_TMP {
-        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+        if let Some(slot) = tmps.get_mut(inst.b as usize) {
             if let Value::Str(key) = std::mem::take(slot) {
                 drop(key);
             }
@@ -901,7 +902,7 @@ fn fetch_to_lean(f: &mut Frame, inst: &Inst) -> Option<Br> {
     let kind = dim_kind(inst);
     let v = {
         let key = key_str(f, kind, inst.b)?;
-        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+        let Value::Array(arr) = f.slots.cvs().get(inst.a as usize)?.get()? else {
             return None;
         };
         let el = if ArrayKey::surely_str(key.as_bytes()) {
@@ -967,7 +968,7 @@ fn fetch_is_lean(f: &mut Frame, inst: &Inst) -> Option<Br> {
         if !ArrayKey::surely_str(key.as_bytes()) {
             return None;
         }
-        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+        let Value::Array(arr) = f.slots.cvs().get(inst.a as usize)?.get()? else {
             return None;
         };
         match arr.lean_find(key, key.hash_now()) {
@@ -993,7 +994,7 @@ fn fetch_key(f: &mut Frame, inst: &Inst) -> Option<Br> {
     let kind = dim_kind(inst);
     let v = {
         let key = key_str(f, kind, inst.b)?;
-        match f.cvs.get(inst.a as usize)?.get()? {
+        match f.slots.cvs().get(inst.a as usize)?.get()? {
             Value::Array(arr) => elem_copy(arr.sym_zstr_probe(key)?)?,
             Value::Reference(r) => match &*r.try_borrow()? {
                 Value::Array(arr) => elem_copy(arr.get_sym_zstr(key)?)?,
@@ -1027,7 +1028,7 @@ pub(super) fn fetch_key_missing(f: &mut Frame, inst: &Inst) -> Option<Br> {
     let kind = dim_kind(inst);
     {
         let key = key_str(f, kind, inst.b)?;
-        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+        let Value::Array(arr) = f.slots.cvs().get(inst.a as usize)?.get()? else {
             return None;
         };
         if arr.get_sym_zstr(key).is_some() {
@@ -1046,8 +1047,8 @@ pub(super) fn fetch_key_missing(f: &mut Frame, inst: &Inst) -> Option<Br> {
 #[allow(clippy::inline_always)] // part of the string-key paths
 fn key_str(f: &Frame, kind: u8, idx: u32) -> Option<&ZStr> {
     let v = match kind {
-        KIND_CV => f.cvs.get(idx as usize)?.get()?,
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(idx as usize)?,
+        KIND_CV => f.slots.cvs().get(idx as usize)?.get()?,
+        KIND_TMP | KIND_TMPKEEP => f.slots.tmps().get(idx as usize)?,
         KIND_LIT => f.code.literals.get(idx as usize)?,
         _ => return None,
     };
@@ -1063,7 +1064,7 @@ fn key_str(f: &Frame, kind: u8, idx: u32) -> Option<&ZStr> {
 #[allow(clippy::inline_always)] // the tail of the string-key paths
 fn release_key(f: &mut Frame, kind: u8, idx: u32) {
     if kind == KIND_TMP {
-        if let Some(slot) = f.tmps.get_mut(idx as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(idx as usize) {
             if matches!(slot, Value::Str(_)) {
                 *slot = Value::Null;
             }
@@ -1100,7 +1101,7 @@ fn fetch_int_wide(f: &mut Frame, inst: &Inst) -> Option<Br> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `fetch_dim_tmp`
 fn fetch_packed_into_tmp(f: &mut Frame, inst: &Inst, i: i64) -> Option<Br> {
-    let v = match f.cvs.get(inst.a as usize)?.get()? {
+    let v = match f.slots.cvs().get(inst.a as usize)?.get()? {
         Value::Array(arr) => plain_copy(arr.get_packed(i)?)?,
         // As in `fetch_packed_into_cv`.
         Value::Str(s) => {
@@ -1128,7 +1129,7 @@ pub(super) fn fetch_packed_two(f: &mut Frame, inst: &Inst) -> Option<Br> {
         return None;
     };
     let (i, k) = (operand_int(f, *first)?, operand_int(f, *second)?);
-    let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+    let Value::Array(arr) = f.slots.cvs().get(inst.a as usize)?.get()? else {
         return None;
     };
     let Value::Array(row) = arr.get_packed(i)? else {
@@ -1150,8 +1151,8 @@ pub(super) fn fetch_packed_two(f: &mut Frame, inst: &Inst) -> Option<Br> {
 #[allow(clippy::inline_always)] // part of the fast paths' heads
 fn operand_int(f: &Frame, o: Operand) -> Option<i64> {
     let v = match o {
-        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize)?.get()?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
         Operand::Lit(l) => f.code.literals.get(l as usize)?,
         Operand::Unused => return None,
     };
@@ -1171,7 +1172,7 @@ fn operand_int(f: &Frame, o: Operand) -> Option<i64> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of the second step's body
 pub(super) fn int_elem_copy(f: &Frame, cv: u32, i: i64) -> Option<Value> {
-    match f.cvs.get(cv as usize)?.get()? {
+    match f.slots.cvs().get(cv as usize)?.get()? {
         Value::Array(arr) => elem_copy(int_elem(arr, i)?),
         Value::Reference(r) => match &*r.try_borrow()? {
             Value::Array(arr) => elem_copy(int_elem(arr, i)?),
@@ -1221,7 +1222,7 @@ fn elem_copy(v: &Value) -> Option<Value> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the tail of the fast paths
 fn store_into_tmp(f: &mut Frame, t: usize, v: Value) -> Option<Br> {
-    let slot = f.tmps.get_mut(t)?;
+    let slot = f.slots.tmps_mut().get_mut(t)?;
     if !matches!(
         slot,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
@@ -1264,7 +1265,7 @@ fn fetch_packed_into_cv(f: &mut Frame, inst: &Inst, i: i64) -> Option<Br> {
     if f.symtab_attached {
         return None;
     }
-    let v = match f.cvs.get(inst.a as usize)?.get()? {
+    let v = match f.slots.cvs().get(inst.a as usize)?.get()? {
         Value::Array(arr) => plain_copy(arr.get_packed(i)?)?,
         // `$str[$i]` inside the string, counted from its start: the shared
         // one-byte string (`zend_fetch_dimension_str`'s `ZSTR_CHAR`). An
@@ -1293,7 +1294,7 @@ fn fetch_str_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
     let Value::Str(k) = f.code.literals.get(inst.b as usize)? else {
         return None;
     };
-    let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+    let Value::Array(arr) = f.slots.cvs().get(inst.a as usize)?.get()? else {
         return None;
     };
     let v = plain_copy(arr.get_zstr(k)?)?;
@@ -1308,7 +1309,7 @@ fn fetch_str_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the tail of `fetch_dim`'s fast paths
 fn store_plain_into(f: &mut Frame, to: u32, v: Value) -> Option<Br> {
-    let slot = f.cvs.get_mut(to as usize)?;
+    let slot = f.slots.cvs_mut().get_mut(to as usize)?;
     if matches!(
         slot.get(),
         Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
@@ -1327,8 +1328,8 @@ fn store_plain_into(f: &mut Frame, to: u32, v: Value) -> Option<Br> {
 #[allow(clippy::inline_always)] // part of the fast paths' heads
 fn int_dim(f: &Frame, inst: &Inst) -> Option<i64> {
     let v = match dim_kind(inst) {
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize)?,
-        KIND_CV => f.cvs.get(inst.b as usize)?.get()?,
+        KIND_TMP | KIND_TMPKEEP => f.slots.tmps().get(inst.b as usize)?,
+        KIND_CV => f.slots.cvs().get(inst.b as usize)?.get()?,
         KIND_LIT => f.code.literals.get(inst.b as usize)?,
         _ => return None,
     };
@@ -1374,18 +1375,18 @@ fn assign_packed(f: &mut Frame, inst: &Inst, i: Option<i64>) -> Option<()> {
     // A table that is no list, and an array behind a reference, are the
     // second step's: left here, before the value is taken.
     if !matches!(
-        f.cvs.get(inst.a as usize).and_then(CvSlot::get),
+        f.slots.cvs().get(inst.a as usize).and_then(CvSlot::get),
         Some(Value::Array(arr)) if arr.is_packed()
     ) {
         return None;
     }
     let vk = val_kind(inst);
     let v = match vk {
-        KIND_CV => plain_copy(f.cvs.get(inst.p)?.get()?)?,
+        KIND_CV => plain_copy(f.slots.cvs().get(inst.p)?.get()?)?,
         KIND_LIT => plain_copy(f.code.literals.get(inst.p)?)?,
-        KIND_TMPKEEP => plain_copy(f.tmps.get(inst.p)?)?,
+        KIND_TMPKEEP => plain_copy(f.slots.tmps().get(inst.p)?)?,
         KIND_TMP => {
-            let t = f.tmps.get_mut(inst.p)?;
+            let t = f.slots.tmps_mut().get_mut(inst.p)?;
             if !t.is_plain() {
                 return None;
             }
@@ -1397,7 +1398,7 @@ fn assign_packed(f: &mut Frame, inst: &Inst, i: Option<i64>) -> Option<()> {
         Ok(()) => Some(()),
         Err(v) => {
             if vk == KIND_TMP {
-                if let Some(t) = f.tmps.get_mut(inst.p) {
+                if let Some(t) = f.slots.tmps_mut().get_mut(inst.p) {
                     // The slot holds the `Null` `take` left (nothing to
                     // release).
                     std::mem::forget(std::mem::replace(t, v));
@@ -1414,7 +1415,8 @@ fn assign_packed(f: &mut Frame, inst: &Inst, i: Option<i64>) -> Option<()> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `assign_packed`
 fn write_plain(f: &mut Frame, cv: u32, i: Option<i64>, v: Value) -> Result<(), Value> {
-    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some(Some(Value::Array(arr))) = f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut)
+    else {
         return Err(v);
     };
     let Some(tbl) = arr.get_mut_unshared() else {
@@ -1506,7 +1508,7 @@ pub(super) unsafe fn isset_dim_lean(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
     if let Some(r) = isset_lean(f, inst) {
-        if let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut((inst.c >> SLOT_SHIFT) as usize) {
             put_tmp(slot, Value::Bool(r));
             release_key(f, dim_kind(inst), inst.b);
             return true;
@@ -1530,13 +1532,13 @@ pub(super) unsafe fn isset_dim_lean(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the body of `isset_dim_lean`
 fn isset_lean(f: &Frame, inst: &Inst) -> Option<bool> {
-    let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
+    let Some(Value::Array(arr)) = f.slots.cvs().get(inst.a as usize).and_then(CvSlot::get) else {
         return None;
     };
     let key = match dim_kind(inst) {
         KIND_LIT => f.code.literals.get(inst.b as usize),
-        KIND_CV => f.cvs.get(inst.b as usize).and_then(CvSlot::get),
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize),
+        KIND_CV => f.slots.cvs().get(inst.b as usize).and_then(CvSlot::get),
+        KIND_TMP | KIND_TMPKEEP => f.slots.tmps().get(inst.b as usize),
         _ => None,
     };
     let found = match key? {
@@ -1576,7 +1578,7 @@ pub(super) unsafe fn isset_dims(frame: *mut Frame, inst: &Inst) -> bool {
     let Some(r) = isset_cv_dims_in(f, inst.a, inst.b, inst.e != 0) else {
         return false;
     };
-    let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) else {
+    let Some(slot) = f.slots.tmps_mut().get_mut((inst.c >> SLOT_SHIFT) as usize) else {
         return false;
     };
     put_tmp(slot, Value::Bool(r));
@@ -1600,6 +1602,21 @@ pub(super) unsafe fn key_exists(frame: *mut Frame, inst: &Inst) -> bool {
     key_exists_in(f, key, array, dst)
 }
 
+/// Whether variable `cv` of `f` holds an object: an `ArrayAccess`
+/// container, whose write none of the array paths takes. Tested where the
+/// first of them declines, so that the write goes on to the object's
+/// dimension handler (`Vm::assign_dim_array_access`, by way of
+/// `declined_vm_step`) without trying the others (~300 instructions a
+/// write of a user `offsetSet()`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test on a declined path
+fn holds_object(f: &Frame, cv: usize) -> bool {
+    matches!(
+        f.slots.cvs().get(cv).and_then(CvSlot::get),
+        Some(Value::Object(_))
+    )
+}
+
 /// `Op::AssignDimCv`: `$cv[dim] = val` (`assign_dim_cv_in`). Releases a
 /// string offset and a consumed value temporary, so it polls.
 ///
@@ -1610,6 +1627,9 @@ pub(super) unsafe fn key_exists(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn assign_dim(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
+    if holds_object(f, inst.a as usize) {
+        return false;
+    }
     let dim = operand(dim_kind(inst), inst.b);
     let val = operand(val_kind(inst), inst.p as u32);
     assign_dim_cv_in(f, inst.a, dim, val)
@@ -1638,6 +1658,9 @@ pub(super) unsafe fn assign_dim_int(frame: *mut Frame, inst: &Inst) -> bool {
     };
     if assign_packed(f, inst, i).is_some() {
         return true;
+    }
+    if holds_object(f, inst.a as usize) {
+        return false;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
     unsafe { assign_int_any(frame, inst) }
@@ -1669,6 +1692,10 @@ pub(super) unsafe fn assign_dim_key(frame: *mut Frame, inst: &Inst) -> bool {
     if assign_str_lean(unsafe { &mut *frame }, inst) {
         return true;
     }
+    // SAFETY: as above; the lean path's borrow of the frame has ended.
+    if holds_object(unsafe { &*frame }, inst.a as usize) {
+        return false;
+    }
     // SAFETY: the caller's contract, passed on; the lean path's borrow of
     // the frame has ended.
     unsafe { assign_dim_key_any(frame, inst) }
@@ -1689,7 +1716,8 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     if dim_kind(inst) != KIND_TMP || f.symtab_attached {
         return false;
     }
-    let Some(Value::Str(key)) = f.tmps.get(inst.b as usize) else {
+    let (cvs, tmps) = f.slots.split_mut();
+    let Some(Value::Str(key)) = tmps.get(inst.b as usize) else {
         return false;
     };
     // An integer in digits is the int key (`ZEND_HANDLE_NUMERIC_STR`).
@@ -1702,7 +1730,7 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
         }
     };
     let v = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_CV => cvs.get(inst.p).and_then(CvSlot::get),
         KIND_LIT => f.code.literals.get(inst.p),
         _ => return false,
     };
@@ -1713,7 +1741,7 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
         Some(Value::Null) => Value::Null,
         _ => return false,
     };
-    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) else {
+    let Some(Some(Value::Array(arr))) = cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) else {
         return false;
     };
     let Some(table) = arr.get_mut_unshared() else {
@@ -1739,7 +1767,7 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
             }
         }
         // The key's string is released (`FREE_OP2`).
-        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+        if let Some(slot) = tmps.get_mut(inst.b as usize) {
             if let Value::Str(key) = std::mem::take(slot) {
                 drop(key);
             }
@@ -1756,7 +1784,7 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
         }
         // A scalar over a scalar: nothing to release.
         std::mem::forget(std::mem::replace(el, v));
-        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+        if let Some(slot) = tmps.get_mut(inst.b as usize) {
             if let Value::Str(key) = std::mem::take(slot) {
                 drop(key);
             }
@@ -1764,7 +1792,7 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
         return true;
     }
     // A new key: the temporary's string moves into the bucket.
-    let Some(slot) = f.tmps.get_mut(inst.b as usize) else {
+    let Some(slot) = tmps.get_mut(inst.b as usize) else {
         return false;
     };
     let Value::Str(key) = std::mem::take(slot) else {
@@ -1823,6 +1851,10 @@ unsafe fn assign_dim_lit(frame: *mut Frame, inst: &Inst) -> bool {
     if assign_lit_lean(unsafe { &mut *frame }, inst) {
         return true;
     }
+    // SAFETY: as above; the lean path's borrow of the frame has ended.
+    if holds_object(unsafe { &*frame }, inst.a as usize) {
+        return false;
+    }
     // SAFETY: the caller's contract, passed on; the lean path's borrow of
     // the frame has ended.
     unsafe { assign_dim_key_general(frame, inst) }
@@ -1853,7 +1885,7 @@ fn assign_lit_lean(f: &mut Frame, inst: &Inst) -> bool {
         return false;
     }
     let v = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_CV => f.slots.cvs().get(inst.p).and_then(CvSlot::get),
         KIND_LIT => f.code.literals.get(inst.p),
         _ => return false,
     };
@@ -1866,7 +1898,12 @@ fn assign_lit_lean(f: &mut Frame, inst: &Inst) -> bool {
         Some(Value::Str(s)) => Value::Str(s.clone()),
         _ => return false,
     };
-    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) else {
+    let Some(Some(Value::Array(arr))) = f
+        .slots
+        .cvs_mut()
+        .get_mut(inst.a as usize)
+        .map(CvSlot::as_mut)
+    else {
         return false;
     };
     let Some(table) = arr.get_mut_unshared() else {
@@ -1905,7 +1942,12 @@ fn assign_key(f: &mut Frame, inst: &Inst) -> Option<()> {
     // is used.
     let key = key_str(f, kind, inst.b)?.clone();
     let v = plain_value(f, inst)?;
-    let written = match f.cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) {
+    let written = match f
+        .slots
+        .cvs_mut()
+        .get_mut(inst.a as usize)
+        .map(CvSlot::as_mut)
+    {
         Some(Some(Value::Array(arr))) => write_key(arr, &key, v),
         Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
             Some(mut held) => match &mut *held {
@@ -1972,11 +2014,11 @@ fn assign_int_wide(f: &mut Frame, inst: &Inst) -> Option<()> {
 #[allow(clippy::inline_always)] // part of the second step's body
 fn plain_value(f: &mut Frame, inst: &Inst) -> Option<Value> {
     match val_kind(inst) {
-        KIND_CV => plain_copy(f.cvs.get(inst.p)?.get()?),
+        KIND_CV => plain_copy(f.slots.cvs().get(inst.p)?.get()?),
         KIND_LIT => plain_copy(f.code.literals.get(inst.p)?),
-        KIND_TMPKEEP => plain_copy(f.tmps.get(inst.p)?),
+        KIND_TMPKEEP => plain_copy(f.slots.tmps().get(inst.p)?),
         KIND_TMP => {
-            let t = f.tmps.get_mut(inst.p)?;
+            let t = f.slots.tmps_mut().get_mut(inst.p)?;
             if !t.is_plain() {
                 return None;
             }
@@ -1992,7 +2034,7 @@ fn plain_value(f: &mut Frame, inst: &Inst) -> Option<Value> {
 #[allow(clippy::inline_always)] // part of the second step's body
 fn give_back(f: &mut Frame, inst: &Inst, v: Value) {
     if val_kind(inst) == KIND_TMP {
-        if let Some(t) = f.tmps.get_mut(inst.p) {
+        if let Some(t) = f.slots.tmps_mut().get_mut(inst.p) {
             // The slot holds the `Null` `take` left (nothing to release).
             std::mem::forget(std::mem::replace(t, v));
         }
@@ -2006,7 +2048,7 @@ fn give_back(f: &mut Frame, inst: &Inst, v: Value) {
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `assign_int_wide`
 pub(super) fn write_wide(f: &mut Frame, cv: u32, i: Option<i64>, v: Value) -> Result<(), Value> {
-    match f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
+    match f.slots.cvs_mut().get_mut(cv as usize).map(CvSlot::as_mut) {
         Some(Some(Value::Array(arr))) => write_into(arr, i, v),
         Some(Some(Value::Reference(r))) => {
             let Some(mut held) = r.try_borrow_mut() else {
@@ -2081,7 +2123,7 @@ pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
         // SAFETY: the caller's contract; `frame` is the current frame.
         let f = unsafe { &*frame };
         matches!(
-            f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+            f.slots.cvs().get(inst.b as usize).and_then(CvSlot::get),
             Some(Value::Str(_))
         )
     };
@@ -2128,14 +2170,15 @@ fn assign_op_str(f: &mut Frame, inst: &Inst) -> bool {
         return false;
     }
     let y = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_CV => f.slots.cvs().get(inst.p).and_then(CvSlot::get),
         KIND_LIT => f.code.literals.get(inst.p),
         _ => return false,
     };
     let Some(&Value::Int(y)) = y else {
         return false;
     };
-    let Some((arr, key)) = two_slots_mut(&mut f.cvs, inst.a as usize, inst.b as usize) else {
+    let Some((arr, key)) = two_slots_mut(f.slots.cvs_mut(), inst.a as usize, inst.b as usize)
+    else {
         return false;
     };
     let (Some(Value::Array(arr)), Some(Value::Str(key))) = (arr.as_mut(), key.get()) else {
@@ -2247,8 +2290,8 @@ fn assign_op_int(f: &mut Frame, inst: &Inst) -> Option<()> {
         return None;
     }
     let y = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.p)?.get()?,
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.p)?,
+        KIND_CV => f.slots.cvs().get(inst.p)?.get()?,
+        KIND_TMP | KIND_TMPKEEP => f.slots.tmps().get(inst.p)?,
         KIND_LIT => f.code.literals.get(inst.p)?,
         _ => return None,
     };
@@ -2261,16 +2304,20 @@ fn assign_op_int(f: &mut Frame, inst: &Inst) -> Option<()> {
     // tables.
     let el = match kind {
         KIND_CV => {
-            let (arr, key) = two_slots(&mut f.cvs, inst.a as usize, inst.b as usize)?;
+            let (arr, key) = two_slots(f.slots.cvs_mut(), inst.a as usize, inst.b as usize)?;
             element(table(arr.as_mut())?, key.get()?)?
         }
         KIND_TMP | KIND_TMPKEEP => {
-            let key = f.tmps.get(inst.b as usize)?;
-            element(table(f.cvs.get_mut(inst.a as usize)?.as_mut())?, key)?
+            let (cvs, tmps) = f.slots.split_mut();
+            let key = tmps.get(inst.b as usize)?;
+            element(table(cvs.get_mut(inst.a as usize)?.as_mut())?, key)?
         }
         KIND_LIT => {
             let key = f.code.literals.get(inst.b as usize)?;
-            element(table(f.cvs.get_mut(inst.a as usize)?.as_mut())?, key)?
+            element(
+                table(f.slots.cvs_mut().get_mut(inst.a as usize)?.as_mut())?,
+                key,
+            )?
         }
         _ => return None,
     };
@@ -2331,7 +2378,7 @@ pub(super) unsafe fn incdec_dim(frame: *mut Frame, inst: &Inst) -> bool {
         return false;
     };
     if inst.c != u32::MAX {
-        if let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut((inst.c >> SLOT_SHIFT) as usize) {
             put_tmp(slot, r);
         }
     }
@@ -2360,19 +2407,20 @@ pub(super) unsafe fn concat_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     }
 }
 
-/// The value operand `b` of a concatenation row when it is a string or an
-/// int that stays where it is (a variable, a temporary, a literal), read
-/// by the kind the row records; `None` for any other value or kind.
+/// The value operand `b` of a concatenation row when it is a string, an
+/// int or null (the empty string, converted silently) that stays where it
+/// is (a variable, a temporary, a literal), read by the kind the row
+/// records; `None` for any other value or kind.
 #[inline(always)]
 #[allow(clippy::inline_always)] // one kind test per operand in the lean paths
 fn concat_rhs<'a>(f: &'a Frame, lits: &'a [Value], inst: &Inst) -> Option<&'a Value> {
     let v = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.b as usize)?.get()?,
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize)?,
+        KIND_CV => f.slots.cvs().get(inst.b as usize)?.get()?,
+        KIND_TMP | KIND_TMPKEEP => f.slots.tmps().get(inst.b as usize)?,
         KIND_LIT => lits.get(inst.b as usize)?,
         _ => return None,
     };
-    matches!(v, Value::Str(_) | Value::Int(_)).then_some(v)
+    matches!(v, Value::Str(_) | Value::Int(_) | Value::Null).then_some(v)
 }
 
 /// Releases a consumed value temporary `b` of a concatenation row once
@@ -2381,7 +2429,7 @@ fn concat_rhs<'a>(f: &'a Frame, lits: &'a [Value], inst: &Inst) -> Option<&'a Va
 #[allow(clippy::inline_always)]
 fn concat_release_rhs(f: &mut Frame, inst: &Inst) {
     if val_kind(inst) == KIND_TMP {
-        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(inst.b as usize) {
             if !matches!(slot, Value::Int(_)) {
                 drop(std::mem::take(slot));
             }
@@ -2407,15 +2455,15 @@ unsafe fn concat_onto_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
     let ta = inst.a as usize;
-    let fits = f.tmps.len() > inst.p
-        && matches!(f.tmps.get(ta), Some(Value::Str(_)))
+    let fits = f.slots.tmps().len() > inst.p
+        && matches!(f.slots.tmps().get(ta), Some(Value::Str(_)))
         && !(matches!(val_kind(inst), KIND_TMP | KIND_TMPKEEP) && inst.b as usize == ta)
         && concat_rhs(f, lits, inst).is_some();
     if !fits {
         // SAFETY: the caller's contract, passed on.
         return unsafe { concat_general(frame, inst) };
     }
-    let Some(Value::Str(s)) = f.tmps.get_mut(ta).map(std::mem::take) else {
+    let Some(Value::Str(s)) = f.slots.tmps_mut().get_mut(ta).map(std::mem::take) else {
         return false;
     };
     let r = match concat_rhs(f, lits, inst) {
@@ -2435,11 +2483,13 @@ unsafe fn concat_onto_tmp(frame: *mut Frame, inst: &Inst) -> bool {
         }
         Some(Value::Str(t)) => s.concat_owned_str_spare(t),
         Some(Value::Int(n)) => s.concat_owned_long_spare(*n),
-        // Checked above, and `b` is not the temporary just taken.
+        // `$s . null`: the string itself (`concat_function`'s empty
+        // operand); also unreachable cases (checked above, and `b` is not
+        // the temporary just taken).
         _ => s,
     };
     concat_release_rhs(f, inst);
-    if let Some(slot) = f.tmps.get_mut(inst.p) {
+    if let Some(slot) = f.slots.tmps_mut().get_mut(inst.p) {
         put_tmp(slot, Value::Str(r));
     }
     true
@@ -2462,13 +2512,13 @@ unsafe fn concat_new(frame: *mut Frame, inst: &Inst) -> bool {
     let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    if f.tmps.len() <= inst.p {
+    if f.slots.tmps().len() <= inst.p {
         return false;
     }
     let ak = dim_kind(inst);
     let left = match ak {
-        KIND_CV => f.cvs.get(inst.a as usize).and_then(CvSlot::get),
-        KIND_TMPKEEP => f.tmps.get(inst.a as usize),
+        KIND_CV => f.slots.cvs().get(inst.a as usize).and_then(CvSlot::get),
+        KIND_TMPKEEP => f.slots.tmps().get(inst.a as usize),
         KIND_LIT => lits.get(inst.a as usize),
         _ => None,
     };
@@ -2483,13 +2533,15 @@ unsafe fn concat_new(frame: *mut Frame, inst: &Inst) -> bool {
             }
         }
         (Some(Value::Str(s)), Some(Value::Int(n))) => s.concat_long_spare(*n),
+        // `$s . null`: the string itself, as with an empty string.
+        (Some(Value::Str(s)), Some(Value::Null)) => s.clone(),
         _ => {
             // SAFETY: the caller's contract, passed on.
             return unsafe { concat_general(frame, inst) };
         }
     };
     concat_release_rhs(f, inst);
-    if let Some(slot) = f.tmps.get_mut(inst.p) {
+    if let Some(slot) = f.slots.tmps_mut().get_mut(inst.p) {
         put_tmp(slot, Value::Str(r));
     }
     true
@@ -2509,7 +2561,7 @@ unsafe fn concat_general(frame: *mut Frame, inst: &Inst) -> bool {
     let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    if f.tmps.len() <= inst.p {
+    if f.slots.tmps().len() <= inst.p {
         return false;
     }
     let (a, b) = (
@@ -2519,7 +2571,7 @@ unsafe fn concat_general(frame: *mut Frame, inst: &Inst) -> bool {
     let Some(s) = concat_in(f, lits, a, b) else {
         return false;
     };
-    put_tmp(&mut f.tmps[inst.p], Value::Str(s));
+    put_tmp(&mut f.slots.tmps_mut()[inst.p], Value::Str(s));
     true
 }
 
@@ -2548,13 +2600,13 @@ pub(super) unsafe fn rope_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    if f.tmps.len() <= inst.p {
+    if f.slots.tmps().len() <= inst.p {
         return false;
     }
     let Some(s) = rope_in(f, lits, parts) else {
         return false;
     };
-    put_tmp(&mut f.tmps[inst.p], Value::Str(s));
+    put_tmp(&mut f.slots.tmps_mut()[inst.p], Value::Str(s));
     true
 }
 
@@ -2572,13 +2624,13 @@ pub(super) unsafe fn cast_str_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    if f.tmps.len() <= inst.p {
+    if f.slots.tmps().len() <= inst.p {
         return false;
     }
     let Some(s) = cast_string_in(f, lits, operand(dim_kind(inst), inst.a)) else {
         return false;
     };
-    put_tmp(&mut f.tmps[inst.p], Value::Str(s));
+    put_tmp(&mut f.slots.tmps_mut()[inst.p], Value::Str(s));
     true
 }
 
@@ -2714,7 +2766,7 @@ pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
 pub(super) unsafe fn init_array(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    let Some(slot) = f.tmps.get_mut(inst.p) else {
+    let Some(slot) = f.slots.tmps_mut().get_mut(inst.p) else {
         return false;
     };
     put_tmp(slot, Value::Array(ZArray::new()));
@@ -2762,7 +2814,7 @@ pub(super) unsafe fn array_add(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // a few tests in each element's handler
 fn literal_first(f: &mut Frame, arr: u32) -> Option<bool> {
-    match f.tmps.get_mut(arr as usize) {
+    match f.slots.tmps_mut().get_mut(arr as usize) {
         Some(Value::Array(a)) => {
             if a.get_mut_unshared().is_some() {
                 Some(false)
@@ -2801,15 +2853,15 @@ fn copied(v: &Value) -> Value {
 #[allow(clippy::inline_always)] // the operand read of each element's handler
 fn literal_value(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<Value> {
     match val_kind(inst) {
-        KIND_CV => match f.cvs.get(inst.p).and_then(CvSlot::get) {
+        KIND_CV => match f.slots.cvs().get(inst.p).and_then(CvSlot::get) {
             None | Some(Value::Reference(_)) => None,
             Some(v) => Some(copied(v)),
         },
-        KIND_TMP => match f.tmps.get_mut(inst.p) {
+        KIND_TMP => match f.slots.tmps_mut().get_mut(inst.p) {
             None | Some(Value::Reference(_)) => None,
             Some(slot) => Some(std::mem::take(slot)),
         },
-        KIND_TMPKEEP => match f.tmps.get(inst.p) {
+        KIND_TMPKEEP => match f.slots.tmps().get(inst.p) {
             None | Some(Value::Reference(_)) => None,
             Some(v) => Some(copied(v)),
         },
@@ -2825,7 +2877,7 @@ fn literal_value(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<Value> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // see above
 fn literal_table<'f>(f: &'f mut Frame, inst: &Inst, first: bool) -> Option<&'f mut HashTable> {
-    let Some(Value::Array(arr)) = f.tmps.get_mut(inst.a as usize) else {
+    let Some(Value::Array(arr)) = f.slots.tmps_mut().get_mut(inst.a as usize) else {
         return None;
     };
     if first {
@@ -2856,7 +2908,7 @@ fn new_literal_table(arr: &mut ZArray, inst: &Inst) {
 #[inline(never)]
 fn literal_decline(f: &mut Frame, inst: &Inst, v: Value) -> bool {
     if val_kind(inst) == KIND_TMP {
-        if let Some(slot) = f.tmps.get_mut(inst.p) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(inst.p) {
             *slot = v;
         }
     }
@@ -3101,12 +3153,13 @@ fn fe_step_plain(f: &mut Frame, inst: &Inst, with_key: bool) -> bool {
         return false;
     }
     let (to, key_to) = if with_key {
-        let Some((to, key_to)) = two_slots_mut(&mut f.cvs, inst.b as usize, inst.d as usize) else {
+        let Some((to, key_to)) = two_slots_mut(f.slots.cvs_mut(), inst.b as usize, inst.d as usize)
+        else {
             return false;
         };
         (to.as_mut(), Some(key_to.as_mut()))
     } else {
-        let Some(to) = f.cvs.get_mut(inst.b as usize) else {
+        let Some(to) = f.slots.cvs_mut().get_mut(inst.b as usize) else {
             return false;
         };
         (to.as_mut(), None)
@@ -3175,7 +3228,7 @@ fn fe_step_plain(f: &mut Frame, inst: &Inst, with_key: bool) -> bool {
 fn fe_fetch_into(f: &mut Frame, inst: &Inst, with_key: bool) -> Br {
     let is_ref = |f: &Frame, cv: u32| {
         matches!(
-            f.cvs.get(cv as usize).and_then(CvSlot::get),
+            f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
             Some(Value::Reference(_))
         )
     };
@@ -3230,7 +3283,7 @@ fn copy_deref(v: &Value) -> Value {
 #[allow(clippy::inline_always)] // part of `fe_fetch_into`
 fn fe_assign(f: &mut Frame, cv: u32, v: Value) {
     let rooted = matches!(
-        f.cvs.get(cv as usize).and_then(CvSlot::get),
+        f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
         Some(Value::Array(_) | Value::Object(_))
     );
     if rooted {
@@ -3239,11 +3292,11 @@ fn fe_assign(f: &mut Frame, cv: u32, v: Value) {
         // attached (`fe_fetch_into` tested both), the value is no
         // reference. The new value is stored first, then the old one
         // released (a possible root, or a destructor that may run).
-        if let Some(slot) = f.cvs.get_mut(cv as usize) {
+        if let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) {
             let old = slot.set(Some(v));
             crate::exec::release_rooted(old);
         }
-    } else if let Some(slot) = f.cvs.get_mut(cv as usize) {
+    } else if let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) {
         match slot.set(Some(v)) {
             // An old string by its own drop (one fewer handle, or freed).
             Some(Value::Str(s)) => drop(s),
@@ -3312,7 +3365,10 @@ fn concat_cv_plain(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<()> {
     if f.symtab_attached || (kind == KIND_CV && vi == cv) {
         return None;
     }
-    if !matches!(f.cvs.get(cv).and_then(CvSlot::get), Some(Value::Str(_))) {
+    if !matches!(
+        f.slots.cvs().get(cv).and_then(CvSlot::get),
+        Some(Value::Str(_))
+    ) {
         return None;
     }
     // The right-hand side, checked before anything changes; a consumed
@@ -3320,17 +3376,17 @@ fn concat_cv_plain(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<()> {
     // (`FREE_OP2`).
     let taken;
     let rhs: &Value = match kind {
-        KIND_CV => f.cvs.get(vi)?.get().filter(|v| str_or_int(v))?,
+        KIND_CV => f.slots.cvs().get(vi)?.get().filter(|v| str_or_int(v))?,
         KIND_LIT => lits.get(vi).filter(|v| str_or_int(v))?,
-        KIND_TMPKEEP => f.tmps.get(vi).filter(|v| str_or_int(v))?,
+        KIND_TMPKEEP => f.slots.tmps().get(vi).filter(|v| str_or_int(v))?,
         KIND_TMP => {
-            let slot = f.tmps.get_mut(vi).filter(|v| str_or_int(v))?;
+            let slot = f.slots.tmps_mut().get_mut(vi).filter(|v| str_or_int(v))?;
             taken = std::mem::take(slot);
             &taken
         }
         _ => return None,
     };
-    let slot = f.cvs.get(cv)?;
+    let slot = f.slots.cvs().get(cv)?;
     // SAFETY: `rhs` never points into this slot (another variable's, a
     // literal, a kept temporary or the taken one), so the string is the
     // only borrow of the slot.

@@ -96,12 +96,17 @@ impl Vm {
             if u.by_ref {
                 let fr = self.frame_mut();
                 let idx = u.parent_cv as usize;
-                let r = match fr.cvs.get_mut(idx).and_then(|c| c.as_mut().as_mut()) {
+                let r = match fr
+                    .slots
+                    .cvs_mut()
+                    .get_mut(idx)
+                    .and_then(|c| c.as_mut().as_mut())
+                {
                     Some(Value::Reference(r)) => r.clone(),
                     Some(v) => v.make_ref(),
                     None => {
                         let r = PhpRef::new(Value::Null);
-                        fr.cvs[idx].set(Some(Value::Reference(r.clone())));
+                        fr.slots.cvs_mut()[idx].set(Some(Value::Reference(r.clone())));
                         r
                     }
                 };
@@ -328,8 +333,8 @@ impl Vm {
 
     /// `$closure->__invoke(...)` (`zend_get_closure_invoke_method`): a
     /// `Closure::__invoke` trampoline with the closure's parameters.
-    pub(crate) fn closure_method_call(&self, o: &Obj, lc: &ZStr) -> Option<PendingCall> {
-        if lc.as_bytes() != b"__invoke" {
+    pub(crate) fn closure_method_call(&self, o: &Obj, lc: &[u8]) -> Option<PendingCall> {
+        if lc != b"__invoke" {
             return None;
         }
         if let Some(mut c) = self.closure_user_call(o) {
@@ -422,7 +427,7 @@ impl Vm {
             f.magic_name = d.magic_name.clone();
         }
         for (cv, v) in &d.vars {
-            if let Some(slot) = f.cvs.get_mut(*cv as usize) {
+            if let Some(slot) = f.slots.cvs_mut().get_mut(*cv as usize) {
                 slot.set(Some(v.clone()));
             }
         }
@@ -443,7 +448,7 @@ impl Vm {
     /// Static variable slot `idx`, if initialized.
     pub(crate) fn static_slot(&mut self, idx: u32) -> Option<PhpRef> {
         if self.frame().statics.is_none() {
-            if let Some(uf) = self.frame().ufunc.clone() {
+            if let Some(uf) = self.frame().ufunc().cloned() {
                 return uf.statics.borrow().get(idx as usize).cloned().flatten();
             }
         }
@@ -464,7 +469,7 @@ impl Vm {
             b[idx].get_or_insert_with(|| PhpRef::new(v)).clone()
         }
         if self.frame().statics.is_none() {
-            if let Some(uf) = self.frame().ufunc.clone() {
+            if let Some(uf) = self.frame().ufunc().cloned() {
                 return put(&mut uf.statics.borrow_mut(), idx as usize, v);
             }
         }

@@ -98,7 +98,7 @@ pub fn docref(vm: &mut Vm, level: i64, msg: &[u8]) -> VmResult<()> {
                 _ => name.to_string_lossy(),
             }
         }
-        Some(f) => match (&f.ufunc, &f.scope) {
+        Some(f) => match (f.ufunc(), &f.scope) {
             (Some(u), Some(c)) => format!(
                 "{}::{}",
                 php_vm::object::display_name(&c.name).to_string_lossy(),

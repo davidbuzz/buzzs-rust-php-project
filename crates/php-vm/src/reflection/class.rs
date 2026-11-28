@@ -926,6 +926,7 @@ fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 line: 0,
                 strict: false,
                 source: None,
+                class_cache: crate::class::AttrClassCache::default(),
             });
         }
     }
@@ -1228,13 +1229,29 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("isAnonymous(): bool", PUB, rc_is_anon)
         .method("isInstantiable(): bool", PUB, rc_is_instantiable)
         .method("isCloneable(): bool", PUB, rc_is_cloneable)
-        .method("getFileName(): string|false", PUB, rc_get_file_name)
-        .method("getStartLine(): int|false", PUB, rc_get_start_line)
-        .method("getEndLine(): int|false", PUB, rc_get_end_line)
-        .method("getDocComment(): string|false", PUB, rc_get_doc_comment)
+        .method(
+            "getFileName(): string|false",
+            PUB | flags::PURE,
+            rc_get_file_name,
+        )
+        .method(
+            "getStartLine(): int|false",
+            PUB | flags::PURE,
+            rc_get_start_line,
+        )
+        .method(
+            "getEndLine(): int|false",
+            PUB | flags::PURE,
+            rc_get_end_line,
+        )
+        .method(
+            "getDocComment(): string|false",
+            PUB | flags::PURE,
+            rc_get_doc_comment,
+        )
         .method(
             "getConstructor(): ?ReflectionMethod",
-            PUB,
+            PUB | flags::PURE,
             rc_get_constructor,
         )
         .method("hasMethod(string $name): bool", PUB, rc_has_method)

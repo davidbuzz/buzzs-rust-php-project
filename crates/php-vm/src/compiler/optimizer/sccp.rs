@@ -2400,11 +2400,15 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         }
                     }
                     Op::Match { table, .. } => {
-                        // No fall-through: every table target and the default.
+                        // Every table target and the default; a `switch`
+                        // table also falls through to its `case` tests.
                         for t in table.labels() {
                             if (t as usize) < len {
                                 successors.push(inst_to_block[t as usize]);
                             }
+                        }
+                        if table.switch && b + 1 < num_blocks {
+                            successors.push(b + 1);
                         }
                     }
                     Op::New { skip: t, .. } => {
@@ -2715,8 +2719,16 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         table,
                     } => {
                         if let Some(va) = op_array.literals.get(*l as usize) {
-                            let t = table.target(va);
-                            *op = Op::Jmp(t);
+                            // (A `switch` table's literal of another type
+                            // goes on to the `case` tests.)
+                            *op = if table.switch {
+                                match table.switch_target(va) {
+                                    Some(t) => Op::Jmp(t),
+                                    None => Op::Nop,
+                                }
+                            } else {
+                                Op::Jmp(table.target(va))
+                            };
                             changed = true;
                         }
                     }

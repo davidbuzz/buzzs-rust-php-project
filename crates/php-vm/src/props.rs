@@ -159,7 +159,9 @@ impl Vm {
     }
 
     fn class_by_name(&self, name: &ZStr) -> Option<Rc<Class>> {
-        self.classes.get(&name.to_ascii_lowercase()).cloned()
+        // (Lower-cased on the stack: a protected property's access check
+        // looks its declaring class up on every miss of the cache.)
+        crate::classlink::with_lc(name.as_bytes(), |lc| self.classes.get(lc).cloned())
     }
 
     /// Property visibility lookup.
@@ -339,7 +341,7 @@ impl Vm {
         else {
             return false;
         };
-        let Some(uf) = &f.ufunc else { return false };
+        let Some(uf) = f.ufunc() else { return false };
         match &uf.hook_prop {
             // `zend_should_call_hook`: the hook's `$this`, or the real
             // instance of an initialized lazy proxy.
@@ -544,12 +546,22 @@ impl Vm {
         let [Seg::Prop(Operand::Cv(n))] = p.segs.as_slice() else {
             return None;
         };
-        let Some(Value::Str(name)) = f.cvs.get(*n as usize).and_then(crate::vm::CvSlot::get) else {
+        let Some(Value::Str(name)) = f
+            .slots
+            .cvs()
+            .get(*n as usize)
+            .and_then(crate::vm::CvSlot::get)
+        else {
             return None;
         };
         let obj = match p.base {
             PlaceBase::This => f.this.clone()?,
-            PlaceBase::Cv(c) => match f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+            PlaceBase::Cv(c) => match f
+                .slots
+                .cvs()
+                .get(c as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Object(o)) => o.clone(),
                 _ => return None,
             },
@@ -2723,27 +2735,37 @@ impl Vm {
         // is nothing to register (`add_object_type_sources` walks every
         // slot).
         let mut kept_ref = false;
-        let slots: Vec<Option<Value>> = d
-            .slots
-            .borrow()
-            .iter()
-            .map(|s| {
-                s.as_ref().map(|v| match v {
-                    Value::Reference(r) if r.refcount() == 1 => r.get(),
-                    v => {
-                        kept_ref |= matches!(v, Value::Reference(_));
-                        v.clone()
-                    }
-                })
-            })
-            .collect();
-        let n = object::new_object(cls.clone(), slots);
+        let n = {
+            let src = d.slots.borrow();
+            if src.iter().any(|s| matches!(s, Some(Value::Reference(_)))) {
+                let slots: Vec<Option<Value>> = src
+                    .iter()
+                    .map(|s| {
+                        s.as_ref().map(|v| match v {
+                            Value::Reference(r) if r.refcount() == 1 => r.get(),
+                            v => {
+                                kept_ref |= matches!(v, Value::Reference(_));
+                                v.clone()
+                            }
+                        })
+                    })
+                    .collect();
+                drop(src);
+                object::new_object(cls.clone(), slots)
+            } else {
+                // No reference among the slots (the common case): copied
+                // into the new object as `new` copies a class's defaults,
+                // without a vector in between (`zend_objects_clone_members`'
+                // copy of the properties table).
+                object::new_object_from_defaults(cls.clone(), &src)
+            }
+        };
         if kept_ref {
             self.add_object_type_sources(&n);
         }
         let nd = object::data(&n);
         nd.copy_unset_flags(d);
-        *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
+        nd.dynamic.borrow_mut().clone_from(&d.dynamic.borrow());
         object::copy_prop_order(d, nd);
         crate::lazy::copy_stale_slots(d, nd);
         self.clone_internal(&o, &n)?;

@@ -65,6 +65,10 @@ pub mod oflags {
     /// The properties table holds frozen copies of the declared
     /// properties (`lazy::stale_slots`).
     pub const STALE_PROPS: u32 = 1 << 7;
+    /// A `WeakReference` was made of the object or it became a `WeakMap`
+    /// key (`IS_OBJ_WEAKLY_REFERENCED`): its free tells the weak
+    /// references (`weakref::object_freed`). Never cleared.
+    pub const WEAKLY_REF: u32 = 1 << 8;
 }
 
 /// The state of a PHP object: the fixed part of its allocation (the
@@ -783,7 +787,9 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
     // `zend_weakrefs_notify`: purge WeakMap entries before the handle can
     // be reused (a value released there may queue a destructor).
-    crate::weakref::object_freed(handle);
+    if flags & oflags::WEAKLY_REF != 0 {
+        crate::weakref::object_freed(handle);
+    }
     if !plain {
         free_contents(d, slots, flags);
     }
@@ -980,7 +986,6 @@ pub(crate) fn reuse_for_new(
         || o.refcount() != 1
         || Rc::weak_count(o.rc()) != 1 + usize::from(buffered)
         || cls.has_destructor()
-        || crate::weakref::is_active()
         || d.dynamic.try_borrow().map_or(true, |t| t.is_some())
         || d.internal.try_borrow().map_or(true, |t| t.is_some())
         || d.lazy.try_borrow().map_or(true, |t| t.is_some())
@@ -1389,6 +1394,11 @@ fn last_pending_handle() -> Option<u32> {
 pub fn release_deferred_handles(handle: u32) {
     let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
+            // Nearly always empty: no lookup (a hash of the handle a
+            // destructor) for nothing.
+            if s.followers.is_empty() {
+                return;
+            }
             if let Some(w) = s.followers.remove(&handle) {
                 s.free.extend(w);
             }
@@ -1400,6 +1410,29 @@ pub fn release_deferred_handles(handle: u32) {
 pub fn take_pending_destructors() -> Vec<Obj> {
     HAS_PENDING.with(|h| h.set(false));
     PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Gives the emptied buffer of [`take_pending_destructors`] back to the
+/// queue when nothing was queued meanwhile, so that the next destructor
+/// queued does not allocate a new one (an allocation and its growth per
+/// destructor when objects are freed one at a time).
+pub fn return_pending_buffer(buf: Vec<Obj>) {
+    if !buf.is_empty() || buf.capacity() == 0 || buf.capacity() > 256 {
+        return;
+    }
+    let _ = PENDING.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            if p.is_empty() && p.capacity() == 0 {
+                *p = buf;
+            }
+        }
+    });
+}
+
+/// Marks `o` weakly referenced ([`oflags::WEAKLY_REF`]).
+pub(crate) fn mark_weakly_referenced(o: &Obj) {
+    let d = data(o);
+    d.flags.set(d.flags.get() | oflags::WEAKLY_REF);
 }
 
 /// Enables or disables destructor scheduling (disabled after fatal errors).

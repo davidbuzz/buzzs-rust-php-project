@@ -138,3 +138,91 @@ float(2)
 "
     );
 }
+
+/// The class a parameter or return type took last is remembered by the
+/// type and accepted again by one address compare: only a class accepted
+/// through a name the type lists. A `self` or `parent` match depends on
+/// the call's scope, which a trait's method has once per using class and
+/// a rebound closure changes; a `static` one on the called class.
+#[test]
+fn remembered_classes_of_types_keep_scope_dependent_checks() {
+    assert_eq!(
+        run(r#"<?php
+interface Shape {} class Base implements Shape {} class Leaf extends Base {} class Other {}
+trait T { function me($o): self { return $o; } function take(self $o) { return 1; } }
+class A { use T; } class B { use T; }
+function t($f) { try { $f(); echo "ok\n"; } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; } }
+for ($i = 0; $i < 3; $i++) {
+  t(fn() => (new A)->me(new A));
+  t(fn() => (new B)->me(new A));
+  t(fn() => (new B)->take(new A));
+  t(fn() => (new A)->take(new A));
+}
+// rebound closure with a self return type
+$c = function ($o): self { return $o; };
+foreach ([A::class, B::class, A::class, B::class] as $s) { $b = Closure::bind($c, null, $s); t(fn() => $b(new A)); }
+// param of a parent type: subclasses, then an unrelated class
+function p(Base $o) { return 1; }
+foreach ([new Leaf, new Base, new Leaf, new Other, new Leaf] as $o) t(fn() => p($o));
+function r($o): Shape { return $o; }
+foreach ([new Leaf, new Leaf, new Other] as $o) t(fn() => r($o));
+// nullable and union
+function n(?Leaf $o) { return 1; }
+foreach ([new Leaf, null, new Base, new Leaf] as $o) t(fn() => n($o));
+function u(Leaf|int $o) { return 1; }
+foreach ([new Leaf, 3, "4", new Base] as $o) t(fn() => u($o));
+// class_alias'd name
+class_alias('Leaf', 'Alias');
+function al(Alias $o) { return 1; }
+foreach ([new Leaf, new Leaf, new Base] as $o) t(fn() => al($o));
+// static return
+class S { function m($o): static { return $o; } } class S2 extends S {}
+foreach ([[new S2, new S2], [new S, new S2], [new S2, new S]] as [$a, $o]) t(fn() => $a->m($o));
+// parent type
+class P1 { } class P2 extends P1 { function m($o): parent { return $o; } }
+foreach ([new P1, new P2, new Other] as $o) t(fn() => (new P2)->m($o));
+"#),
+        r#"ok
+TypeError: B::me(): Return value must be of type B, A returned
+TypeError: B::take(): Argument #1 ($o) must be of type B, A given, called in t.php on line 9
+ok
+ok
+TypeError: B::me(): Return value must be of type B, A returned
+TypeError: B::take(): Argument #1 ($o) must be of type B, A given, called in t.php on line 9
+ok
+ok
+TypeError: B::me(): Return value must be of type B, A returned
+TypeError: B::take(): Argument #1 ($o) must be of type B, A given, called in t.php on line 9
+ok
+ok
+TypeError: B::{closure:t.php:13}(): Return value must be of type B, A returned
+ok
+TypeError: B::{closure:t.php:13}(): Return value must be of type B, A returned
+ok
+ok
+ok
+TypeError: p(): Argument #1 ($o) must be of type Base, Other given, called in t.php on line 17
+ok
+ok
+ok
+TypeError: r(): Return value must be of type Shape, Other returned
+ok
+ok
+TypeError: n(): Argument #1 ($o) must be of type ?Leaf, Base given, called in t.php on line 22
+ok
+ok
+ok
+ok
+TypeError: u(): Argument #1 ($o) must be of type Leaf|int, Base given, called in t.php on line 24
+ok
+ok
+TypeError: al(): Argument #1 ($o) must be of type Alias, Base given, called in t.php on line 28
+ok
+ok
+TypeError: S::m(): Return value must be of type S2, S returned
+ok
+ok
+TypeError: P2::m(): Return value must be of type P1, Other returned
+"#
+    );
+}

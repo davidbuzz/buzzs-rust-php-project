@@ -31,7 +31,7 @@ use super::super::{discard_unrooted, release_slot_value, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
 use crate::opcode::{
-    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
+    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, Seg, PROP_CACHE_THIS,
 };
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_INIT, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
@@ -128,7 +128,7 @@ fn with_hit_obj<R>(
     let obj: &Obj = if hit.base == PROP_CACHE_THIS {
         f.this.as_ref()?
     } else {
-        match f.cvs.get(hit.base as usize)?.get()? {
+        match f.slots.cvs().get(hit.base as usize)?.get()? {
             Value::Object(o) => o,
             // A reference being modified elsewhere (`descend`'s "Cannot
             // modify a value while it is being iterated") is left to the
@@ -206,7 +206,7 @@ fn hit_data<'a>(f: &'a Frame, hit: &Hit) -> Option<&'a ObjectData> {
     let obj: &Obj = if hit.base == PROP_CACHE_THIS {
         f.this.as_ref()?
     } else {
-        match f.cvs.get(hit.base as usize)?.get()? {
+        match f.slots.cvs().get(hit.base as usize)?.get()? {
             Value::Object(o) => o,
             _ => return None,
         }
@@ -227,7 +227,7 @@ fn hit_data<'a>(f: &'a Frame, hit: &Hit) -> Option<&'a ObjectData> {
 fn base_is_ref(f: &Frame, hit: &Hit) -> bool {
     hit.base != PROP_CACHE_THIS
         && matches!(
-            f.cvs.get(hit.base as usize).and_then(CvSlot::get),
+            f.slots.cvs().get(hit.base as usize).and_then(CvSlot::get),
             Some(Value::Reference(_))
         )
 }
@@ -252,6 +252,62 @@ fn read_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>) -> Option<Valu
         None => None,
     };
     v
+}
+
+/// `ZEND_FETCH_OBJ_IS` (`$obj->name ?? x`) of a dynamic property the
+/// object lacks, on a hit of the place's dynamic cache entry: `true` when
+/// the read is `null` without a diagnostic and without user code
+/// (`zend_std_read_property` with `BP_VAR_IS`: no `__isset()` and no
+/// `__get()` to call, an object that is not lazy, no table entry), or of
+/// a variable holding no object ([`is_of_non_object`]). A table that is
+/// being borrowed, and every other case, give `false`.
+#[inline]
+pub(in crate::exec) fn is_miss_hit(f: &Frame, pid: PlaceId) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ, 0) else {
+        return is_of_non_object(f, pid);
+    };
+    let Some(name) = dyn_name(f, &hit) else {
+        return is_of_non_object(f, pid);
+    };
+    let absent = |od: &ObjectData| -> Option<bool> {
+        if od.class.magic.get.is_some() || od.class.magic.isset.is_some() {
+            return Some(false);
+        }
+        let table = od.dynamic.try_borrow().ok()?;
+        Some(table.as_deref().is_none_or(|t| t.get_zstr(name).is_none()))
+    };
+    if let Some(od) = hit_data(f, &hit) {
+        return absent(od) == Some(true);
+    }
+    if base_is_ref(f, &hit) {
+        if let Some(absent) = with_hit_obj(f, &hit, absent) {
+            return absent;
+        }
+    }
+    is_of_non_object(f, pid)
+}
+
+/// `ZEND_FETCH_OBJ_IS` (`$v->name ?? x`) of a compiled variable that holds
+/// no object (null, undefined, a scalar, an array; also through a
+/// reference) and a literal property name: `null`, silently (the handler's
+/// `ZVAL_NULL(EX_VAR(opline->result.var))` for a non-object container).
+#[inline]
+fn is_of_non_object(f: &Frame, pid: PlaceId) -> bool {
+    let Some(place) = f.code.places.get(pid as usize) else {
+        return false;
+    };
+    let (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(_))]) = (&place.base, place.segs.as_slice())
+    else {
+        return false;
+    };
+    match f.slots.cvs().get(*cv as usize).and_then(CvSlot::get) {
+        Some(Value::Object(_)) => false,
+        Some(Value::Reference(r)) => r
+            .try_borrow()
+            .is_some_and(|v| !matches!(&*v, Value::Object(_) | Value::Reference(_))),
+        // Undefined (read silently in `isset` mode), or any other value.
+        _ => true,
+    }
 }
 
 /// `ZEND_FETCH_OBJ_R` on a cache hit: the (dereferenced) value of an
@@ -395,7 +451,7 @@ unsafe fn store_copy_lean(
             // The store mirrors the variable in the symbol table.
             return None;
         }
-        if let Some(cell) = f.cvs.get(cv as usize) {
+        if let Some(cell) = f.slots.cvs().get(cv as usize) {
             // SAFETY: no reference into this variable's slot is alive:
             // `v` does not live in the frame's variables, and the
             // offset the caller looked up is no longer used.
@@ -449,10 +505,10 @@ pub(in crate::exec) fn fetch_prop_dim_lean(
     dst: u32,
     to: Option<u32>,
 ) -> Option<bool> {
-    if (dst as usize) >= f.tmps.len() {
+    if (dst as usize) >= f.slots.tmps().len() {
         return None;
     }
-    let tmps = f.tmps.as_mut_ptr();
+    let tmps = f.slots.tmps_mut().as_mut_ptr();
     let f: &Frame = f;
     let (class, slot, base) = plain_key_lean(f, pid, PC_READ)?;
     let key = super::dim_ref_in(f, dim)?;
@@ -504,10 +560,10 @@ pub(in crate::exec) fn fetch_prop_lean(
     dst: u32,
     to: Option<u32>,
 ) -> Option<bool> {
-    if (dst as usize) >= f.tmps.len() {
+    if (dst as usize) >= f.slots.tmps().len() {
         return None;
     }
-    let tmps = f.tmps.as_mut_ptr();
+    let tmps = f.slots.tmps_mut().as_mut_ptr();
     let f: &Frame = f;
     let (class, slot, base) = plain_key_lean(f, pid, PC_READ)?;
     let od = plain_obj(f, base, class)?;
@@ -709,12 +765,12 @@ fn assign_dim_hit(
         super::release_str_tmp_in(f, dim);
     }
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
     if let (Some(d), Some(r)) = (dst, ret) {
-        if let Some(slot) = f.tmps.get_mut(d as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(d as usize) {
             put_tmp(slot, r);
         }
     }
@@ -748,14 +804,14 @@ pub(in crate::exec) fn isset_prop_dim_in(
     dst: u32,
     empty: bool,
 ) -> bool {
-    if (dst as usize) >= f.tmps.len() {
+    if (dst as usize) >= f.slots.tmps().len() {
         return false;
     }
     let Some(r) = isset_dim_hit(f, pid, dim, empty) else {
         return false;
     };
     super::release_str_tmp_in(f, dim);
-    put_tmp(&mut f.tmps[dst as usize], Value::Bool(r));
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], Value::Bool(r));
     true
 }
 
@@ -930,8 +986,8 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
         None => None,
     };
     let src = match val {
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize),
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize),
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
         Operand::Lit(lit) => f.code.literals.get(lit as usize),
         Operand::Unused => None,
     };
@@ -961,12 +1017,12 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
     // becomes a possible root: `zval_ptr_dtor` of the old value).
     release_slot_value(old);
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
     if let (Some(d), Some(r)) = (dst, result) {
-        if let Some(slot) = f.tmps.get_mut(d as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(d as usize) {
             put_tmp(slot, r);
         }
     }
@@ -1184,8 +1240,8 @@ pub(in crate::exec) fn concat_prop_in(
     let res = {
         let rhs = match val {
             Operand::Lit(l) => f.code.literals.get(l as usize),
-            Operand::Tmp(t) => f.tmps.get(t as usize),
-            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize),
+            Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
             _ => None,
         };
         let rhs = match rhs {
@@ -1205,7 +1261,7 @@ pub(in crate::exec) fn concat_prop_in(
         return false;
     };
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
@@ -1241,6 +1297,53 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
     Some(out)
 }
 
+/// The entry of `e`'s chain for the object the place's base holds in
+/// frame `f`: `e` itself, or the alternate for the object's class when `e`
+/// is for another (a site seeing objects of several classes in turn: a
+/// base class's method for its subclasses). Testing it here,
+/// before the miss, keeps such a site off the refill path, where the two
+/// entries swapped on every access. Only a first entry that does not match
+/// pays the object's lookup.
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of every plain property hit
+fn entry_for_base<'c>(
+    f: &Frame,
+    e: &'c crate::opcode::PropCacheEntry,
+) -> &'c crate::opcode::PropCacheEntry {
+    let Some(alt) = e.alt.as_deref() else {
+        return e;
+    };
+    let obj = if e.base == PROP_CACHE_THIS {
+        f.this.as_ref()
+    } else {
+        match f
+            .slots
+            .cvs()
+            .get(e.base as usize)
+            .and_then(crate::vm::CvSlot::get)
+        {
+            Some(Value::Object(o)) => Some(o),
+            _ => None,
+        }
+    };
+    let Some(o) = obj else {
+        return e;
+    };
+    let cls = Rc::as_ptr(&object::data(o).class) as usize;
+    if cls == e.class_addr {
+        return e;
+    }
+    // The alternates (at most three: `place::propcache::MAX_ALTS`).
+    let mut node = Some(alt);
+    while let Some(a) = node {
+        if cls == a.class_addr && a.base == e.base {
+            return a;
+        }
+        node = a.alt.as_deref();
+    }
+    e
+}
+
 /// [`plain_key`] of a write: the entry allows a plain write ([`PC_WRITE`])
 /// or the initialization of an uninitialized slot ([`PC_INIT`]); its flags
 /// come with it.
@@ -1251,7 +1354,7 @@ fn plain_write_key(f: &Frame, pid: PlaceId) -> Option<(usize, usize, u32, u32, u
         return None;
     }
     let cache = f.code.prop_cache.try_borrow().ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (PC_WRITE | PC_INIT) == 0 || e.flags & PC_DYN != 0 || e.scope_addr != scope_addr(f)
     {
         return None;
@@ -1273,7 +1376,7 @@ fn plain_key(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32, u3
         return None;
     }
     let cache = f.code.prop_cache.try_borrow().ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
         return None;
     }
@@ -1293,7 +1396,7 @@ fn plain_key_lean(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u3
     // SAFETY: the shared reference lives for the copies below only; no
     // exclusive borrow of the cache can start meanwhile.
     let cache = unsafe { f.code.prop_cache.try_borrow_unguarded() }.ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
         return None;
     }
@@ -1309,7 +1412,7 @@ fn plain_obj(f: &Frame, base: u32, class: usize) -> Option<&ObjectData> {
     let obj: &Obj = if base == PROP_CACHE_THIS {
         f.this.as_ref()?
     } else {
-        match f.cvs.get(base as usize)?.get()? {
+        match f.slots.cvs().get(base as usize)?.get()? {
             Value::Object(o) => o,
             _ => return None,
         }
@@ -1335,8 +1438,8 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
         return false;
     };
     let src = match val {
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize),
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize),
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
         Operand::Lit(lit) => f.code.literals.get(lit as usize),
         Operand::Unused => None,
     };
@@ -1390,12 +1493,12 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
     // child in a cycle of its own was never collected).
     release_slot_value(old);
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
     if let (Some(d), Some(r)) = (dst, result) {
-        if let Some(slot) = f.tmps.get_mut(d as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(d as usize) {
             put_tmp(slot, r);
         }
     }
@@ -1489,7 +1592,7 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
                 return false;
             };
             if let Operand::Tmp(t) = val {
-                if let Some(slot) = f.tmps.get_mut(t as usize) {
+                if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
                     put_tmp(slot, Value::Null);
                 }
             }
@@ -1507,7 +1610,7 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
             let Some(r) = isset_hit(f, place, empty) else {
                 return false;
             };
-            match f.tmps.get_mut(dst as usize) {
+            match f.slots.tmps_mut().get_mut(dst as usize) {
                 Some(slot) => {
                     put_tmp(slot, Value::Bool(r));
                     true
@@ -1520,7 +1623,7 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
             dst,
             skip,
         } => {
-            if dst as usize >= f.tmps.len() {
+            if dst as usize >= f.slots.tmps().len() {
                 return false;
             }
             let Some(cls) = cached_class(f, lit) else {
@@ -1547,7 +1650,7 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
                 };
                 o
             };
-            if let Some(slot) = f.tmps.get_mut(dst as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) {
                 put_tmp(slot, Value::Object(o));
             }
             true
@@ -1575,7 +1678,7 @@ fn cached_class(f: &Frame, lit: u32) -> Option<Rc<crate::class::Class>> {
 /// `drop_in_place`).
 #[inline(always)]
 fn put_dst(f: &mut Frame, dst: Option<u32>, v: Value) {
-    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+    if let Some(slot) = dst.and_then(|d| f.slots.tmps_mut().get_mut(d as usize)) {
         put_tmp(slot, v);
     } else {
         discard_unrooted(Some(v));
@@ -1604,6 +1707,9 @@ impl Vm {
         if let Some(f) = self.frames.last_mut() {
             if let Some(v) = read_hit(f, pid) {
                 return Some(store_fetched_in(f, dst, to, v));
+            }
+            if mode == FetchMode::Is && is_miss_hit(f, pid) {
+                return Some(store_fetched_in(f, dst, to, Value::Null));
             }
         }
         let v = self.prop_cache_read(pid)?;
@@ -2563,7 +2669,7 @@ fn chain_object(f: &Frame, pid: PlaceId) -> Option<(Obj, usize, u32)> {
     if mid.is_empty() {
         return None;
     }
-    let o = dims_to_object(f, f.cvs.get(cv as usize)?.get()?, mid)?;
+    let o = dims_to_object(f, f.slots.cvs().get(cv as usize)?.get()?, mid)?;
     Some((o, pid as usize, *lit))
 }
 
@@ -2579,6 +2685,39 @@ pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
     drop(obj);
     super::release_place_str_tmps(f, pid);
     Some(v)
+}
+
+/// [`read_chain_in`]'s `isset`-mode miss (`$this->a->name ?? x`): `null`
+/// when the object the chain reaches lacks the dynamic property its tail
+/// entry describes and no user code is to run, as [`is_miss_hit`]
+/// decides for a one-segment place. Consumed string offsets are
+/// released. `None`, nothing consumed, for the generic fetch.
+#[inline(never)]
+fn read_chain_is_miss_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
+    let hit = tail_hit(f, idx, lit, &obj, PC_READ)?;
+    if hit.flags & PC_DYN == 0 {
+        return None;
+    }
+    let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+        return None;
+    };
+    let od = object::data(&obj);
+    if od.class.magic.get.is_some() || od.class.magic.isset.is_some() {
+        return None;
+    }
+    let absent = od
+        .dynamic
+        .try_borrow()
+        .ok()?
+        .as_deref()
+        .is_none_or(|t| t.get_zstr(name).is_none());
+    if !absent {
+        return None;
+    }
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(Value::Null)
 }
 
 /// The tail cache entry `idx` (literal `lit`) as a [`Hit`] for `obj` in
@@ -2728,8 +2867,15 @@ impl Vm {
         }
         let f = self.user_frame_mut()?;
         if !is_prop_dims_place(f, pid) {
-            // `$this->a->b`, `$list[$k]->name` & co.
-            return read_chain_in(f, pid);
+            // `$this->a->b`, `$list[$k]->name` & co.; in `Is` mode also a
+            // missing dynamic property (`?? d`).
+            return read_chain_in(f, pid).or_else(|| {
+                if mode == FetchMode::Is {
+                    read_chain_is_miss_in(f, pid)
+                } else {
+                    None
+                }
+            });
         }
         // A hit; in `Is` mode also a missing key (`?? d`).
         let read = |f: &mut Frame| {

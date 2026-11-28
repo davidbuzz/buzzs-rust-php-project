@@ -442,7 +442,7 @@ pub fn register(vm: &mut Vm) {
         .method("columnCount(): int", pub_, column_count)
         .method("debugDumpParams(): ?bool", pub_, debug_dump_params)
         .method("errorCode(): ?string", pub_, error_code)
-        .method("errorInfo(): array", pub_, error_info)
+        .method("errorInfo(): array", pub_ | acc::PURE, error_info)
         .method("execute(?array $params = null): bool", pub_, execute)
         .method(
             "fetch(int $mode = PDO::FETCH_DEFAULT, int $cursorOrientation = PDO::FETCH_ORI_NEXT, int $cursorOffset = 0): mixed",

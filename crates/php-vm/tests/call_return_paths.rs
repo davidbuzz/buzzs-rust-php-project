@@ -1047,3 +1047,97 @@ end
 "#
     );
 }
+
+/// Calls whose arguments go through the generic send (`Vm::push_simple_ucall`)
+/// return through the plain return when their declaration is plain:
+/// values, destructor order, typed returns, unused results, recursion,
+/// `func_get_args()` and `debug_backtrace()`. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn generically_sent_calls_take_the_plain_return() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~D{$this->n} "; } }
+class A {
+  public $p = [1, 2];
+  function m($x, $y = 3) { return $x + $y; }
+  function obj($x): D { return new D($x); }
+  function arr($a) { $a[] = 9; return $a; }
+  function same($o) { return $o; }
+  function str(string $s): string { return $s . "!"; }
+  function none($x) { $l = new D("local$x"); }
+}
+function f($a, $b) { return [$a, $b]; }
+function g(int $i): int { return $i * 2; }
+$a = new A; $k = ['x' => 5, 'y' => [7]];
+for ($i = 0; $i < 3; $i++) {
+  echo $a->m($k['x'] ?? 0, $k['y'][0]), " ";
+  echo json_encode(f($a->p[0] + 1, $k['y'])), " ";
+  echo g(strlen("ab") + $i), " ";
+  $o = $a->obj($i . "o"); echo $o->n, " "; unset($o);
+  echo json_encode($a->arr($a->p + [5 => 1])), " ";
+  $a->none($i * 10);
+  $a->obj("discard$i");
+  echo $a->str(sprintf("%d", $i)), " ";
+  $s = $a->same(new D("s$i")); echo $s->n, " "; $s = null;
+  echo "\n";
+}
+try { g("x" . $i); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function rec($n) { return $n <= 0 ? 0 : $n + rec($n - 1 + 0 * strlen("")); }
+echo rec(50), "\n";
+function cnt() { return func_num_args() . ":" . json_encode(func_get_args()); }
+echo cnt(1 + 1, [2][0]), "\n";
+function bt() { return count(debug_backtrace()); }
+function outer($x) { return bt() + $x; }
+echo outer(1 + 1), "\n";
+"#),
+        r#"12 [2,[7]] 4 0o ~D0o {"0":1,"1":2,"5":1,"6":9} ~Dlocal0 ~Ddiscard0 0! s0 ~Ds0 
+12 [2,[7]] 6 1o ~D1o {"0":1,"1":2,"5":1,"6":9} ~Dlocal10 ~Ddiscard1 1! s1 ~Ds1 
+12 [2,[7]] 8 2o ~D2o {"0":1,"1":2,"5":1,"6":9} ~Dlocal20 ~Ddiscard2 2! s2 ~Ds2 
+g(): Argument #1 ($i) must be of type int, string given, called in t.php on line 27
+1275
+2:[2,2]
+4
+"#
+    );
+}
+
+/// Call plans take near-plain callees called without variadic extras
+/// (`calls::plan_takes`): a trailing variadic parameter left empty, typed
+/// declared parameters, a by-reference parameter past the arguments,
+/// defaults, `func_get_args()`, recursion, static and instance methods;
+/// calls passing extras, and functions with static variables, keep the
+/// prepared call. Expected output: php-src's (PHP 8.5).
+#[test]
+fn plans_take_variadic_callees_without_extras() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function value($value, ...$args) { return $value instanceof \Closure ? $value(...$args) : $value; }
+function collect($items = [], ...$rest) { return count($items) . ":" . count($rest); }
+function typed(int $a, string ...$more) { return $a . "/" . implode(",", $more); }
+function refpast($a, &$out = null) { $out = "set"; return $a * 2; }
+function withstatic($x, ...$r) { static $n = 0; return $x + ++$n; }
+function fga($a, ...$r) { return func_num_args() . json_encode(func_get_args()) . json_encode($r); }
+function dflt($a, $b = [1, 2], ...$c) { return $a . count($b) . count($c); }
+for ($i = 0; $i < 3; $i++) {
+  echo value($i), value(fn() => "c$i"), value(fn($x) => "d$x", $i), " ";
+  echo collect([1, 2]), collect(), collect([1], 2, 3), " ";
+  echo typed($i), typed($i, "x", "y"), " ";
+  echo refpast($i), " ", refpast($i, $o), $o ?? "-", " ";
+  echo withstatic($i), " ", fga($i), fga($i, 7), " ", dflt($i), dflt($i, [], 9), "\n";
+}
+try { typed("no"); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+function rec($n, ...$r) { return $n <= 0 ? count($r) : rec($n - 1); } echo rec(20), "\n";
+class K { static function v($x, ...$a) { return $x . count($a); } function m($x, ...$a) { return $x . count($a); } }
+$k = new K; for ($i = 0; $i < 3; $i++) echo K::v($i), $k->m($i), $k->m($i, 1), " "; echo "\n";
+"#),
+        r#"0c0d0 2:00:01:2 0/0/x,y 0 0set 1 1[0][]2[0,7][7] 020001
+1c1d1 2:00:01:2 1/1/x,y 2 2set 3 1[1][]2[1,7][7] 120101
+2c2d2 2:00:01:2 2/2/x,y 4 4set 5 1[2][]2[2,7][7] 220201
+App\typed(): Argument #1 ($a) must be of type int, string given, called in t.php on line 17
+0
+000001 101011 202021 
+"#
+    );
+}

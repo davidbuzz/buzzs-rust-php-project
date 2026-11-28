@@ -100,9 +100,8 @@ function f($n) {
     $q = new Q(0);
     for ($i = 0; $i < $n; $i++) { $q = new Q($q); }
     for ($i = 0; $i < $n; $i++) { $m = ($i % 2) ? new Sub : new P; }
-    // (Last: once a weak reference exists, no object is made that way.)
+    // A weakly referenced object (its weak reference must see it go).
     for ($i = 0; $i < $n; $i++) { $v = new P; $w = WeakReference::create($v); }
-    for ($i = 0; $i < $n; $i++) { $z = new P; }
     echo "|", count($keep), isset($u->a) ? 'set' : 'unset', $s->x;
 }
 f(6);
@@ -188,4 +187,26 @@ echo ids(8), "\n", mem(50), "\n";
         !cfg!(debug_assertions) || reused >= 40,
         "{reused} objects made in a block at hand"
     );
+}
+
+/// Objects nothing refers to weakly are made in place also once weak
+/// references exist (`oflags::WEAKLY_REF`, php-src's
+/// `IS_OBJ_WEAKLY_REFERENCED`, is the object's own); a weakly referenced
+/// one is not, and its weak reference sees it freed.
+#[test]
+fn weak_references_keep_only_their_objects_from_reuse() {
+    let (out, reused) = run(r#"<?php
+class P { public $a = 1; }
+function f($n) {
+    $v = new P; $w = WeakReference::create($v);
+    for ($i = 0; $i < $n; $i++) { $z = new P; }
+    $v = new P;
+    echo var_export($w->get(), true), "|";
+    $map = new WeakMap; $k = new P; $map[$k] = 1; $k = new P;
+    echo count($map);
+}
+f(6);
+"#);
+    assert_eq!(out, "NULL|0");
+    assert_eq!(reused, 5);
 }

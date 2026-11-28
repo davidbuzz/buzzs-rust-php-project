@@ -225,6 +225,7 @@ fn case_attributes(vm: &Vm, c: &Class, cc: &ClassConst) -> Vec<crate::class::Att
                     line: at.span.line,
                     strict: false,
                     source: None,
+                    class_cache: crate::class::AttrClassCache::default(),
                 });
             }
         }
@@ -428,6 +429,7 @@ fn rk_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             line: 0,
             strict: false,
             source: None,
+            class_cache: crate::class::AttrClassCache::default(),
         });
     }
     let file = vm.const_files.get(&c.name).cloned();

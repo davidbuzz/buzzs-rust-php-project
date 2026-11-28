@@ -26,7 +26,7 @@
 use super::{Br, Inst, TOp};
 use crate::exec::spec::{
     assign_prop_dim_in, fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean,
-    incdec_static_prop_in, isset_prop_dim_in, prop_op_in, read_hit, store_fetched_in,
+    incdec_static_prop_in, is_miss_hit, isset_prop_dim_in, prop_op_in, read_hit, store_fetched_in,
 };
 use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
@@ -58,7 +58,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         // 1-op read: the result goes to `dst` directly.
-        // `store_fetched_in` indexes `f.tmps[dst]` without a bounds check,
+        // `store_fetched_in` indexes `f.slots.tmps()[dst]` without a bounds check,
         // so validate `dst` (frames are sized to `num_tmps` by `usable`).
         Op::FetchObjProp {
             place,
@@ -69,10 +69,14 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             if mode == FetchMode::List || !place_ok(code, place) || dst >= code.num_tmps {
                 return None;
             }
+            // `k`: the read is silent (`??`, `isset` mode), for the cold
+            // path's answer to a dynamic property the object lacks.
+            let k = u8::from(mode == FetchMode::Is);
             match to {
                 None => Inst {
                     a: place,
                     b: dst,
+                    k,
                     ..plain(TOp::FetchObjProp)
                 },
                 // `$cv = $obj->prop`: the folded `AssignCv` after the read
@@ -87,6 +91,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                         b: dst,
                         c: super::rel(code, i, u32::try_from(i + 2).ok()?)?,
                         d: cv,
+                        k,
                         ..plain(TOp::FetchObjPropTo)
                     }
                 }
@@ -371,7 +376,7 @@ pub(super) unsafe fn incdec_static(frame: *mut Frame, inst: &Inst) -> bool {
 /// release.
 fn this_const_value(f: &Frame, inst: &Inst) -> Option<php_runtime::Value> {
     if !matches!(
-        f.tmps.get(inst.p)?,
+        f.slots.tmps().get(inst.p)?,
         php_runtime::Value::Null
             | php_runtime::Value::Bool(_)
             | php_runtime::Value::Int(_)
@@ -512,8 +517,11 @@ pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(never)]
 fn fetch_prop_cold(f: &mut Frame, inst: &Inst) -> bool {
     // (The plain read was just tried: the general hit.)
-    let Some(v) = read_hit(f, inst.a) else {
-        return false;
+    let v = match read_hit(f, inst.a) {
+        Some(v) => v,
+        // `$obj->undeclared ?? x` of an object without it: null.
+        None if inst.k != 0 && is_miss_hit(f, inst.a) => php_runtime::Value::Null,
+        None => return false,
     };
     store_fetched_in(f, inst.b, None, v);
     true
@@ -648,8 +656,10 @@ pub(super) unsafe fn fetch_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
 /// The hits [`fetch_prop_to`]'s lean form leaves, as [`fetch_prop_cold`].
 #[inline(never)]
 fn fetch_prop_to_cold(f: &mut Frame, inst: &Inst) -> Br {
-    let Some(v) = read_hit(f, inst.a) else {
-        return Br::Decline;
+    let v = match read_hit(f, inst.a) {
+        Some(v) => v,
+        None if inst.k != 0 && is_miss_hit(f, inst.a) => php_runtime::Value::Null,
+        None => return Br::Decline,
     };
     if store_fetched_in(f, inst.b, Some(inst.d), v) {
         Br::Jump

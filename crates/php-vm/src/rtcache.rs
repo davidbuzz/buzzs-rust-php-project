@@ -417,15 +417,20 @@ pub(crate) fn class_const_hit_in(f: &Frame, spec: &ClassSpec, name: u32) -> Opti
 #[allow(clippy::inline_always)]
 pub(crate) fn class_const_hit_dyn_in(f: &Frame, op: Operand, name: u32) -> Option<Value> {
     let obj = match op {
-        Operand::Tmp(t) => match f.tmps.get(t as usize)? {
+        Operand::Tmp(t) => match f.slots.tmps().get(t as usize)? {
             Value::Object(o) if o.refcount() > 1 => o,
             _ => return None,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize)? {
             Value::Object(o) => o,
             _ => return None,
         },
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+        Operand::Cv(cv) => match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)?
+        {
             Value::Object(o) => o,
             _ => return None,
         },
@@ -988,7 +993,7 @@ impl Vm {
     fn rt_dyn_class(&self, op: Operand) -> Option<Rc<Class>> {
         let f = self.frame();
         match op {
-            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Object(o)) => Some(object::class_of(o).clone()),
                 _ => None,
             },
@@ -1005,7 +1010,7 @@ impl Vm {
     #[inline]
     fn rt_release_dyn_class(&mut self, op: Operand) {
         if let Operand::Tmp(t) = op {
-            let v = std::mem::take(&mut self.frame_mut().tmps[t as usize]);
+            let v = std::mem::take(&mut self.frame_mut().slots.tmps_mut()[t as usize]);
             drop(v);
         }
     }

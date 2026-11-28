@@ -3,6 +3,8 @@
 //! Object identity through the object store and the property count of a
 //! table whose declared slot is being unset (`Zend/tests/unset`).
 //! Expected outputs are `/usr/bin/php8.5 -n` (the same as master here).
+mod common;
+
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -22,6 +24,16 @@ impl Write for Sink {
 }
 
 /// Runs `source` as `t.php` (including shutdown) and returns its output.
+/// [`run`] with the standard library ([`common::vm_with_stdlib`]).
+fn run_std(source: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
+    let _ = vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    String::from_utf8(output).expect("UTF-8 output")
+}
+
 fn run(source: &str) -> String {
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
@@ -118,5 +130,43 @@ unset($p->b);
          object(X)#2 (2) {\n  [\"a\"]=>\n  int(1)\n}\n\
          object(X)#2 (1) {\n  [\"a\"]=>\n  int(1)\n}\n--\n\
          object(P)#1 (0) {\n}\n"
+    );
+}
+
+/// `clone` of an object without references among its properties copies
+/// them straight into the new object (`object::new_object_from_defaults`);
+/// one with a reference takes the general copy (a shared reference stays
+/// shared, one the object alone held is dereferenced). `__clone()`,
+/// dynamic and private properties, readonly properties, destructors of
+/// nested objects, an internal class's clone handler. Expected output:
+/// php-src's (PHP 8.5).
+#[test]
+fn clones_copy_properties_as_php_src() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class M { public $a = 1, $b = [1, 2], $c = 'x'; protected $p = null; private $q = ['k' => 'v'];
+  public ?M $child = null; public readonly int $ro; function __construct() { $this->ro = 5; }
+  function __clone() { $this->c .= '-c'; } function q() { return $this->q; } }
+class D { public $o; function __destruct() { echo "~D "; } }
+$m = new M; $m->dyn = 'dyn'; $m->b[] = 3; $m->child = new M; $r = &$m->a; $r = 9;
+$c = clone $m; $c->b[] = 4; $c->a = 10;
+echo json_encode([$m->a, $c->a, $m->b, $c->b, $c->c, $m->c, $c->dyn, $c->q(), $c->child === $m->child, $c->ro]), "\n";
+unset($r); $c2 = clone $m; $c2->a = 11; echo $m->a, " ", $c2->a, "\n";
+$d = new D; $d->o = new D; $e = clone $d; unset($d); echo "| "; unset($e); echo "\n";
+for ($i = 0; $i < 3; $i++) { $x = clone $m; } echo $x->c, " ", count((array)$x), "\n";
+$s = new SplStack; $s->push(1); $s2 = clone $s; $s2->push(2); echo count($s), count($s2), "\n";
+try { $c->ro = 1; } catch (Error $err) { echo $err->getMessage(), "\n"; }
+"#
+        ),
+        r#"
+Deprecated: Creation of dynamic property M::$dyn is deprecated in t.php on line 6
+[10,10,[1,2,3],[1,2,3,4],"x-c","x","dyn",{"k":"v"},true,5]
+11 11
+~D | ~D ~D 
+x-c 8
+12
+Cannot modify readonly property M::$ro
+"#
     );
 }

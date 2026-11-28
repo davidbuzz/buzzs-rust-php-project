@@ -910,28 +910,43 @@ pub(crate) fn call(
     this: Option<&Obj>,
     args: &[Value],
 ) -> Option<RtResult<Value>> {
-    let this = match this_obj(this) {
-        Ok(t) => t,
-        Err(e) => return Some(Err(e)),
-    };
     let name = method_name(class, method)?;
-    let func = format!("{class}::{name}");
+    Some(call_named(host, class, method, name, this, args))
+}
+
+/// [`call`] of the method `name` as declared (`method` lower-cased), the
+/// lookup of the declaration done: the caller holds it (`php-ext-spl`'s
+/// method table).
+#[allow(clippy::too_many_lines)]
+pub(crate) fn call_named(
+    host: &mut dyn SplHost,
+    class: &str,
+    method: &str,
+    name: &str,
+    this: Option<&Obj>,
+    args: &[Value],
+) -> RtResult<Value> {
+    let this = this_obj(this)?;
+    // The function's name for an argument error (`Class::method`), built
+    // only for one: the parameter-less methods (`valid()`, `current()`,
+    // ...) of an iterator run on every step of a `foreach`.
+    let func = || format!("{class}::{name}");
     if class == "EmptyIterator" {
-        return Some(Args::none(&func, args).and_then(|()| match method {
+        return Args::none(&func(), args).and_then(|()| match method {
             "valid" => Ok(Value::Bool(false)),
             "key" => Err(bad_method_call("Accessing the key of an EmptyIterator")),
             "current" => Err(bad_method_call("Accessing the value of an EmptyIterator")),
             _ => Ok(Value::Null),
-        }));
+        });
     }
     if class == "RecursiveIteratorIterator" || class == "RecursiveTreeIterator" {
-        return Some(recursive_call(host, class, method, &func, this, args));
+        return recursive_call(host, class, method, &func(), this, args);
     }
-    Some((|| -> RtResult<Value> {
+    (|| -> RtResult<Value> {
         let st = state_of(host, this)?;
         if method == "__construct" {
             if class == "AppendIterator" {
-                Args::none(&func, args)?;
+                Args::none(&func(), args)?;
                 if !st.dual(|d| matches!(d.kind, DualKind::Unknown))? {
                     return Err(bad_method_call(
                         "AppendIterator::getIterator() must be called exactly once per instance",
@@ -956,8 +971,8 @@ pub(crate) fn call(
                 | ("AppendIterator", "append")
                 | ("RegexIterator", "setmode" | "setflags" | "setpregflags")
         );
-        if !takes_args {
-            Args::none(&func, args)?;
+        if !takes_args && !args.is_empty() {
+            Args::none(&func(), args)?;
         }
         if !(class == "CachingIterator" && method == "offsetunset") {
             check(&st)?;
@@ -1062,7 +1077,8 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("LimitIterator", "seek") => {
-                let a = Args::new(&func, args, &["offset"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["offset"], 1, Some(1))?;
                 let pos = a.long(host, 0)?;
                 limit_seek(host, &st, pos)?;
                 st.dual(|d| Value::Int(d.pos))
@@ -1106,7 +1122,8 @@ pub(crate) fn call(
                 })
             }
             ("CachingIterator", "offsetset") => {
-                let a = Args::new(&func, args, &["key", "value"], 2, Some(2))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["key", "value"], 2, Some(2))?;
                 let key = a.str(host, 0)?;
                 let value = a.raw(1);
                 full_cache_check(this, &st)?;
@@ -1116,7 +1133,8 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("CachingIterator", "offsetget") => {
-                let a = Args::new(&func, args, &["key"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["key"], 1, Some(1))?;
                 let key = a.str(host, 0)?;
                 full_cache_check(this, &st)?;
                 if let Some(v) = with_cache(&st, |c| c.get(&ArrayKey::from_zstr(&key)).cloned())? {
@@ -1131,7 +1149,8 @@ pub(crate) fn call(
             }
             ("CachingIterator", "offsetunset") => {
                 check(&st)?;
-                let a = Args::new(&func, args, &["key"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["key"], 1, Some(1))?;
                 let key = a.str(host, 0)?;
                 full_cache_check(this, &st)?;
                 let g = with_cache(&st, |c| c.remove(&ArrayKey::from_zstr(&key)))?;
@@ -1139,7 +1158,8 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("CachingIterator", "offsetexists") => {
-                let a = Args::new(&func, args, &["key"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["key"], 1, Some(1))?;
                 let key = a.str(host, 0)?;
                 full_cache_check(this, &st)?;
                 with_cache(&st, |c| {
@@ -1155,7 +1175,8 @@ pub(crate) fn call(
             }
             ("CachingIterator", "getflags") => caching_flags(&st).map(Value::Int),
             ("CachingIterator", "setflags") => {
-                let a = Args::new(&func, args, &["flags"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["flags"], 1, Some(1))?;
                 let flags = a.long(host, 0)?;
                 if !cit_flags_ok(flags) {
                     return Err(a.value_error(0, CIT_FLAGS_MSG));
@@ -1228,7 +1249,8 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("AppendIterator", "append") => {
-                let a = Args::new(&func, args, &["iterator"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["iterator"], 1, Some(1))?;
                 let it_obj = a.object_of(host, 0, "Iterator")?;
                 let Some((aobj, ait)) = append_parts(&st)? else {
                     return Err(not_initialized());
@@ -1319,7 +1341,8 @@ pub(crate) fn call(
             ("RegexIterator", "getflags") => regex_field(&st, |f, _, _, _| Value::Int(*f)),
             ("RegexIterator", "getpregflags") => regex_field(&st, |_, p, _, _| Value::Int(*p)),
             ("RegexIterator", "setmode") => {
-                let a = Args::new(&func, args, &["mode"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["mode"], 1, Some(1))?;
                 let mode = a.long(host, 0)?;
                 if !(0..REGIT_MODE_MAX).contains(&mode) {
                     return Err(a.value_error(0, REGIT_MODE_MSG));
@@ -1328,22 +1351,25 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("RegexIterator", "setflags") => {
-                let a = Args::new(&func, args, &["flags"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["flags"], 1, Some(1))?;
                 let v = a.long(host, 0)?;
                 regex_field(&st, |f, _, _, _| *f = v)?;
                 Ok(Value::Null)
             }
             ("RegexIterator", "setpregflags") => {
-                let a = Args::new(&func, args, &["pregFlags"], 1, Some(1))?;
+                let fname = func();
+                let a = Args::new(&fname, args, &["pregFlags"], 1, Some(1))?;
                 let v = a.long(host, 0)?;
                 regex_field(&st, |_, p, _, _| *p = v)?;
                 Ok(Value::Null)
             }
             _ => Err(RuntimeError::Error(format!(
-                "Call to undefined method {func}()"
+                "Call to undefined method {}()",
+                func()
             ))),
         }
-    })())
+    })()
 }
 
 // ---------------------------------------------------------------------------

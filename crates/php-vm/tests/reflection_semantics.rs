@@ -3,6 +3,8 @@
 //! End-to-end checks of reflection (and closely related engine builtins)
 //! against the outputs of the php-src `ext/reflection` `.phpt` tests.
 
+mod common;
+
 use php_runtime::Value;
 use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::{Vm, VmOptions};
@@ -21,6 +23,16 @@ impl Write for Sink {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// [`run`] with the standard library ([`common::vm_with_stdlib`]).
+fn run_std(source: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    String::from_utf8(output).expect("UTF-8 output")
 }
 
 fn run(source: &str) -> String {
@@ -1059,4 +1071,164 @@ ReflectionProperty::isStatic ReflectionProperty::isStatic Error: Internal error:
 ReflectionProperty::isStatic direct NULL
 "#;
     assert_eq!(run(src), expected);
+}
+
+/// `getAttributes($class, IS_INSTANCEOF)` finds the filter's class and
+/// each attribute's class once a request (`AttrClassCache`,
+/// `Vm::attr_filter_class`): subclasses and interfaces of the filter,
+/// repeated calls, an attribute class an autoloader declares later (a miss
+/// is not kept), an alias, a missing filter class; `method_exists()` and
+/// `getMethod()` with names in other case (`Class::find_method`).
+/// Expected output: php-src's (PHP 8.5).
+#[test]
+fn attribute_filters_find_classes_once_a_request() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+interface Marker {}
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)] class Base {}
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)] class Child extends Base implements Marker {}
+#[Attribute] class Other {}
+class Target {
+  #[Child] #[Other] #[Base] #[Later] #[Child]
+  function m(#[Child] $p, #[Other] $q) {}
+}
+$m = new ReflectionMethod('Target', 'm');
+for ($i = 0; $i < 2; $i++) {
+  echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), " | ";
+  echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Marker::class, ReflectionAttribute::IS_INSTANCEOF))), " | ";
+  echo count($m->getAttributes(Other::class, ReflectionAttribute::IS_INSTANCEOF)), " | ";
+  foreach ($m->getParameters() as $p) echo $p->getName(), "=", count($p->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF)), " ";
+  echo "\n";
+}
+spl_autoload_register(function ($c) { echo "[autoload $c] "; if ($c === 'Later') { eval('#[Attribute] class Later extends Base {}'); } });
+echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), "\n";
+echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), "\n";
+class_alias('Child', 'ChildAlias');
+echo count($m->getAttributes('ChildAlias', ReflectionAttribute::IS_INSTANCEOF)), " ", count($m->getAttributes('child')), "\n";
+try { $m->getAttributes('Missing', ReflectionAttribute::IS_INSTANCEOF); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo method_exists('Target', 'M') ? "y" : "n", method_exists('Target', 'mX') ? "y" : "n", " ", (new ReflectionClass('Target'))->getMethod('M')->getName(), "\n";
+"#
+        ),
+        r#"Child,Base,Child | Child,Child | 1 | p=1 q=0 
+Child,Base,Child | Child,Child | 1 | p=1 q=0 
+[autoload Later] Child,Base,Later,Child
+Child,Base,Later,Child
+2 2
+[autoload Missing] Class "Missing" not found
+yn m
+"#
+    );
+}
+
+/// A pure builtin method called with a class constant among its arguments
+/// (`getAttributes(X::class, ReflectionAttribute::IS_INSTANCEOF)`) is
+/// called at once from the tape, the constant read from its fetch's
+/// cache (`calls::pure_method_now`); an invalid flag and a constant of a
+/// missing class still give the framed call's errors. Expected output:
+/// php-src's (PHP 8.5).
+#[test]
+fn pure_methods_take_class_constant_arguments() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class Ctx {}
+class Sub extends Ctx {}
+class C { const F = ReflectionAttribute::IS_INSTANCEOF; const BAD = 5; function m(#[Sub] $a, $b) {} }
+$m = new ReflectionMethod('C', 'm'); [$a, $b] = $m->getParameters();
+for ($i = 0; $i < 3; $i++) {
+  echo count($a->getAttributes(Ctx::class, ReflectionAttribute::IS_INSTANCEOF)), count($b->getAttributes(Ctx::class, ReflectionAttribute::IS_INSTANCEOF));
+  echo count($a->getAttributes(Ctx::class, C::F)), count($a->getAttributes(Sub::class, 0)), " ";
+}
+try { $a->getAttributes(Ctx::class, C::BAD); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $a->getAttributes(Ctx::class, Missing::X); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo $a->getName(), $m->isStatic() ? 1 : 0, "\n";
+"#
+        ),
+        r#"1011 1011 1011 ValueError: ReflectionParameter::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Error: Class "Missing" not found
+a0
+"#
+    );
+}
+
+/// The read-only reflection methods the tape calls without a frame of
+/// their own (`flags::PURE`: `getDeclaringClass()`, `getDocComment()`,
+/// `getFileName()`, `getStartLine()`, `getEndLine()`, `getConstructor()`)
+/// for user, internal, enum and trait classes, closures and a `__call()`
+/// trampoline; an uninitialized reflection object's error is the framed
+/// call's (its trace names the method). Expected output: php-src's (PHP
+/// 8.5).
+#[test]
+fn frameless_reflection_reads_match_php_src() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+/** Base doc */
+class Base { /** p doc */ public $p; public function __construct() {} /** m doc */ public function m() {}
+  public function __call($n, $a) {} }
+trait T { /** t doc */ public function tm() {} }
+/** Kid */
+class Kid extends Base { use T; protected int $q = 1; }
+enum E: string { case A = 'a'; /** f */ public function f() {} }
+function show($r) { $o = [];
+  foreach (['getDocComment', 'getFileName', 'getStartLine', 'getEndLine'] as $m) { $v = $r->$m(); $o[] = is_string($v) ? basename($v) : var_export($v, true); }
+  return implode('|', $o); }
+for ($i = 0; $i < 2; $i++) {
+  foreach ([new ReflectionClass('Kid'), new ReflectionClass('Base'), new ReflectionClass('ArrayObject'), new ReflectionClass('E'), new ReflectionClass('T'), new ReflectionEnum('E')] as $rc) {
+    $c = $rc->getConstructor(); echo $rc->getName(), ": ", show($rc), " ctor=", $c ? $c->class . '::' . $c->getName() : 'none', "\n";
+  }
+  foreach ([new ReflectionMethod('Kid', 'm'), new ReflectionMethod('Kid', 'tm'), new ReflectionMethod('ArrayObject', 'count'), new ReflectionMethod('E', 'f')] as $rm) {
+    $d = $rm->getDeclaringClass(); echo $rm->getName(), ": ", get_class($d), " ", $d->getName(), " ", show($rm), "\n";
+  }
+  foreach ([new ReflectionFunction('show'), new ReflectionFunction(fn() => 1), new ReflectionFunction('strlen'), new ReflectionFunction(Closure::fromCallable([new Kid, 'magic']))] as $rf) { echo $rf->getName(), ": ", show($rf), "\n"; }
+  foreach ([new ReflectionProperty('Kid', 'p'), new ReflectionProperty('Kid', 'q')] as $rp) { echo $rp->getName(), ": ", $rp->getDeclaringClass()->getName(), " ", var_export($rp->getDocComment(), true), "\n"; }
+}
+class MyRC extends ReflectionClass { function __construct() {} }
+class MyRM extends ReflectionMethod { function __construct() {} }
+foreach (['getDocComment', 'getStartLine', 'getConstructor'] as $m) { try { (new MyRC)->$m(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], "\n"; } }
+try { (new MyRM)->getDeclaringClass(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], " line ", $e->getLine(), "\n"; }
+$a = new ReflectionMethod('Kid', 'm'); $b = $a->getDeclaringClass(); $c = $a->getDeclaringClass(); var_dump($b === $c, $b == $c);
+"#
+        ),
+        r"Kid: ** Kid *|t.php|7|7 ctor=Base::__construct
+Base: ** Base doc *|t.php|3|4 ctor=Base::__construct
+ArrayObject: false|false|false|false ctor=ArrayObject::__construct
+E: false|t.php|8|8 ctor=none
+T: false|t.php|5|5 ctor=none
+E: false|t.php|8|8 ctor=none
+m: ReflectionClass Base ** m doc *|t.php|3|3
+tm: ReflectionClass Kid ** t doc *|t.php|5|5
+count: ReflectionClass ArrayObject false|false|false|false
+f: ReflectionEnum E ** f *|t.php|8|8
+show: false|t.php|9|11
+{closure:t.php:19}: false|t.php|19|19
+strlen: false|false|false|false
+magic: false|false|false|false
+p: Base '/** p doc */'
+q: Kid false
+Kid: ** Kid *|t.php|7|7 ctor=Base::__construct
+Base: ** Base doc *|t.php|3|4 ctor=Base::__construct
+ArrayObject: false|false|false|false ctor=ArrayObject::__construct
+E: false|t.php|8|8 ctor=none
+T: false|t.php|5|5 ctor=none
+E: false|t.php|8|8 ctor=none
+m: ReflectionClass Base ** m doc *|t.php|3|3
+tm: ReflectionClass Kid ** t doc *|t.php|5|5
+count: ReflectionClass ArrayObject false|false|false|false
+f: ReflectionEnum E ** f *|t.php|8|8
+show: false|t.php|9|11
+{closure:t.php:19}: false|t.php|19|19
+strlen: false|false|false|false
+magic: false|false|false|false
+p: Base '/** p doc */'
+q: Kid false
+Error: Internal error: Failed to retrieve the reflection object @getDocComment
+Error: Internal error: Failed to retrieve the reflection object @getStartLine
+Error: Internal error: Failed to retrieve the reflection object @getConstructor
+Error: Internal error: Failed to retrieve the reflection object @getDeclaringClass line 25
+bool(false)
+bool(true)
+"
+    );
 }

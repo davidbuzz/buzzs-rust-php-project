@@ -1119,8 +1119,16 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             PUB,
             rf_get_closure_used_variables,
         )
-        .method("getDocComment(): string|false", PUB, rf_get_doc_comment)
-        .method("getEndLine(): int|false", PUB, rf_get_end_line)
+        .method(
+            "getDocComment(): string|false",
+            PUB | flags::PURE,
+            rf_get_doc_comment,
+        )
+        .method(
+            "getEndLine(): int|false",
+            PUB | flags::PURE,
+            rf_get_end_line,
+        )
         .method(
             "getExtension(): ?ReflectionExtension",
             PUB,
@@ -1131,7 +1139,11 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             PUB,
             rf_get_extension_name,
         )
-        .method("getFileName(): string|false", PUB, rf_get_file_name)
+        .method(
+            "getFileName(): string|false",
+            PUB | flags::PURE,
+            rf_get_file_name,
+        )
         .method("getName(): string", PUB | flags::PURE, rf_get_name)
         .method(
             "getNamespaceName(): string",
@@ -1158,7 +1170,11 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             PUB | flags::PURE,
             rf_get_short_name,
         )
-        .method("getStartLine(): int|false", PUB, rf_get_start_line)
+        .method(
+            "getStartLine(): int|false",
+            PUB | flags::PURE,
+            rf_get_start_line,
+        )
         .method("getStaticVariables(): array", PUB, rf_get_static_variables)
         .method("returnsReference(): bool", PUB, rf_returns_ref)
         .method(
@@ -1328,7 +1344,7 @@ pub(crate) fn register_method(vm: &mut Vm) {
         )
         .method(
             "getDeclaringClass(): ReflectionClass",
-            PUB,
+            PUB | flags::PURE,
             rm_get_declaring_class,
         )
         .method("getPrototype(): ReflectionMethod", PUB, rm_get_prototype)

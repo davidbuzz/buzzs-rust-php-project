@@ -136,6 +136,7 @@ impl ImageBuilder {
                 line: attr.line,
                 strict: attr.strict,
                 source: attr.source.clone(),
+                class_cache: crate::class::AttrClassCache::default(),
             })
             .collect()
     }

@@ -96,7 +96,7 @@ impl Vm {
             // Numbers have no Drop: the slot's value can be left in place
             // (consuming reads leave Null behind, but every later use of a
             // tmp slot is preceded by a write).
-            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Int(i)) => Some(Num::Int(*i)),
                 Some(Value::Float(x)) => Some(Num::Float(*x)),
                 _ => None,
@@ -366,13 +366,13 @@ impl Vm {
     pub(crate) fn read(&mut self, op: Operand) -> VmResult<Value> {
         match op {
             Operand::Tmp(t) => {
-                let v = std::mem::take(&mut self.frame_mut().tmps[t as usize]);
+                let v = std::mem::take(&mut self.frame_mut().slots.tmps_mut()[t as usize]);
                 Ok(match v {
                     Value::Reference(r) => r.get(),
                     v => v,
                 })
             }
-            Operand::TmpKeep(t) => Ok(self.frame().tmps[t as usize].deref()),
+            Operand::TmpKeep(t) => Ok(self.frame().slots.tmps()[t as usize].deref()),
             Operand::Lit(i) => Ok(self.lit(i)),
             Operand::Cv(cv) => self.read_cv(cv),
             Operand::Unused => Ok(Value::Null),
@@ -383,8 +383,10 @@ impl Vm {
     /// references.
     pub(crate) fn read_raw(&mut self, op: Operand) -> VmResult<Value> {
         match op {
-            Operand::Tmp(t) => Ok(std::mem::take(&mut self.frame_mut().tmps[t as usize])),
-            Operand::TmpKeep(t) => Ok(self.frame().tmps[t as usize].clone()),
+            Operand::Tmp(t) => Ok(std::mem::take(
+                &mut self.frame_mut().slots.tmps_mut()[t as usize],
+            )),
+            Operand::TmpKeep(t) => Ok(self.frame().slots.tmps()[t as usize].clone()),
             other => self.read(other),
         }
     }
@@ -466,7 +468,12 @@ impl Vm {
         which: AaFn,
     ) -> Option<(Obj, Rc<crate::func::Method>)> {
         let f = self.frame();
-        let obj = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+        let obj = match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
+        {
             Some(Value::Object(o)) => o.clone(),
             _ => return None,
         };
@@ -481,7 +488,8 @@ impl Vm {
         };
         let dim_ok = match dim {
             Operand::Cv(d) => f
-                .cvs
+                .slots
+                .cvs()
                 .get(d as usize)
                 .and_then(crate::vm::CvSlot::get)
                 .is_some(),
@@ -556,7 +564,8 @@ impl Vm {
         };
         let dim_ok = match dim {
             Operand::Cv(d) => f
-                .cvs
+                .slots
+                .cvs()
                 .get(d as usize)
                 .and_then(crate::vm::CvSlot::get)
                 .is_some(),
@@ -655,7 +664,7 @@ impl Vm {
     pub(crate) fn cv_assign(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let slot = f.cvs.get_mut(idx)?;
+        let slot = f.slots.cvs_mut().get_mut(idx)?;
         if matches!(
             slot.get(),
             Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))
@@ -675,16 +684,16 @@ impl Vm {
     fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let is_ref = matches!(f.cvs.get(idx)?.get(), Some(Value::Reference(_)));
+        let is_ref = matches!(f.slots.cvs().get(idx)?.get(), Some(Value::Reference(_)));
         if !is_ref && f.symtab_attached {
             f.unsync_cv_from_symtab(cv);
         }
-        let old = match f.cvs.get(idx)?.get() {
+        let old = match f.slots.cvs().get(idx)?.get() {
             Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
                 return Some((r.clone(), v));
             }
             Some(Value::Reference(r)) => Some(r.set(v.clone())),
-            _ => f.cvs[idx].set(Some(v.clone())),
+            _ => f.slots.cvs_mut()[idx].set(Some(v.clone())),
         };
         if !is_ref {
             f.sync_cv_to_symtab(cv, &v);
@@ -714,15 +723,19 @@ impl Vm {
         }
         let other = match val {
             Operand::Lit(l) => f.code.literals.get(l as usize),
-            Operand::Cv(c) if c != cv => f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get),
-            Operand::Tmp(t) => f.tmps.get(t as usize),
+            Operand::Cv(c) if c != cv => f
+                .slots
+                .cvs()
+                .get(c as usize)
+                .and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize),
             _ => None,
         };
         let Some(Value::Array(other)) = other else {
             return false;
         };
         let other = other.clone();
-        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+        let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) else {
             return false;
         };
         let Some(Value::Array(mine)) = slot.as_mut().as_mut() else {
@@ -734,7 +747,7 @@ impl Vm {
         let result = dst.map(|_| Value::Array(mine.clone()));
         drop(other);
         if let Operand::Tmp(t) = val {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -774,8 +787,8 @@ impl Vm {
         let dim = *dim;
         let key = match dim {
             Operand::Lit(i) => f.code.literals.get(i as usize)?,
-            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
-            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            Operand::Cv(cv) => f.slots.cvs().get(cv as usize)?.get()?,
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize)?,
             _ => return None,
         };
         let (cell, _) = self.static_prop_cached(class, *l)?;
@@ -808,7 +821,7 @@ impl Vm {
             if let Some(slot) = self
                 .frames
                 .last_mut()
-                .and_then(|f| f.tmps.get_mut(t as usize))
+                .and_then(|f| f.slots.tmps_mut().get_mut(t as usize))
             {
                 drop(std::mem::take(slot));
             }
@@ -934,9 +947,9 @@ impl Vm {
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
         let f = self.frame_mut();
         let idx = cv as usize;
-        if idx < f.cvs.len() {
+        if idx < f.slots.cvs().len() {
             f.sync_cv_to_symtab(cv, &v);
-            if let Some(slot) = f.cvs.get_mut(idx) {
+            if let Some(slot) = f.slots.cvs_mut().get_mut(idx) {
                 let old = slot.set(Some(v));
                 release_slot_value(old);
             }
@@ -951,7 +964,7 @@ impl Vm {
     #[inline(always)]
     #[allow(clippy::inline_always)] // see above: the result store of most instructions
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
-        let slot = &mut self.frame_mut().tmps[t as usize];
+        let slot = &mut self.frame_mut().slots.tmps_mut()[t as usize];
         if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &v) {
             *dst_f = *rf;
             return;
@@ -988,7 +1001,7 @@ impl Vm {
             Operand::Cv(cv) => return self.peek_cv_bool(cv),
             _ => return None,
         };
-        let slot = self.frame_mut().tmps.get_mut(t as usize)?;
+        let slot = self.frame_mut().slots.tmps_mut().get_mut(t as usize)?;
         if let Value::Bool(b) = *slot {
             // A bool has nothing to drop: overwrite it without the
             // out-of-line `drop_in_place` a plain assignment calls.
@@ -1158,7 +1171,20 @@ impl Vm {
         if !tape::worth_entering(code, ip) {
             return None;
         }
+        // The base frame's plain return may end the execution on the
+        // tape (`Vm::return_plain`), without `Vm::return_at_base`.
+        let outer = std::mem::replace(&mut self.tape_base, base + 1);
         let (next, last) = tape::run_tape(self, base, code, ip);
+        self.tape_base = outer;
+        if last == hot::BASE_RETURNED {
+            let v = std::mem::take(&mut self.tape_base_value);
+            if Self::safe_point_due() {
+                if let Err(t) = self.safe_point_after_leave() {
+                    return Some(Err(t));
+                }
+            }
+            return Some(Ok(v));
+        }
         if last == hot::LEFT {
             // As `Vm::run` after a call or return on the tape whose safe
             // point is due: the frame's `ip` is stored in it.
@@ -1266,7 +1292,8 @@ impl Vm {
                         // released, and destructed, before the catch runs.
                         let (ts, te) = entry.try_tmps;
                         let dead: Vec<Value> = f
-                            .tmps
+                            .slots
+                            .tmps_mut()
                             .get_mut(ts as usize..te as usize)
                             .map(|t| t.iter_mut().map(std::mem::take).collect())
                             .unwrap_or_default();
@@ -1366,7 +1393,7 @@ impl Vm {
         let mut dead = Vec::new();
         for l in &code.live_tmps {
             if (l.start..l.end).contains(&throw_ip) {
-                if let Some(v) = f.tmps.get_mut(l.tmp as usize) {
+                if let Some(v) = f.slots.tmps_mut().get_mut(l.tmp as usize) {
                     dead.push(std::mem::take(v));
                 }
             }
@@ -1430,7 +1457,7 @@ impl Vm {
             self.op_fe_free(i);
         }
         let f = self.frame_mut();
-        let tmps: Vec<Value> = f.tmps.iter_mut().map(std::mem::take).collect();
+        let tmps: Vec<Value> = f.slots.tmps_mut().iter_mut().map(std::mem::take).collect();
         drop(tmps);
     }
 
@@ -1626,6 +1653,15 @@ impl Vm {
                             ip
                         };
                         let (mut next, last) = tape::run_tape(self, base, code, start);
+                        if last == hot::BASE_RETURNED {
+                            // The base frame returned on the tape (as the
+                            // `Return` arm's `Flow::Done` below).
+                            let v = std::mem::take(&mut self.tape_base_value);
+                            if Self::safe_point_due() {
+                                self.safe_point_after_leave()?;
+                            }
+                            return Ok(v);
+                        }
                         if last == hot::LEFT {
                             // A call or return there, with the safe point
                             // after it due (as after the fast `DoCall` and
@@ -2469,7 +2505,9 @@ impl Vm {
                     // the frame the execution started with may still return
                     // directly.
                     Op::Return { val } => {
-                        if let Some(done) = self.return_at_base(*val, base, ip) {
+                        if let Some(v) = self.return_plain_base(*val, base, ip) {
+                            Flow::Done(v)
+                        } else if let Some(done) = self.return_at_base(*val, base, ip) {
                             done
                         } else {
                             let v = match val {
@@ -2505,8 +2543,7 @@ impl Vm {
                     Op::ReturnRef { place } => {
                         let by_ref = self
                             .frame()
-                            .ufunc
-                            .as_ref()
+                            .ufunc()
                             .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
                         let v = if by_ref {
                             Value::Reference(self.place_make_ref(*place)?)
@@ -2725,7 +2762,8 @@ impl Vm {
                             Operand::Cv(cv) => {
                                 let f = self.frame();
                                 if !f.symtab_attached {
-                                    f.cvs
+                                    f.slots
+                                        .cvs()
                                         .get(*cv as usize)
                                         .and_then(CvSlot::get)
                                         .map(|v| crate::opcode::type_mask::matches(*mask, v))
@@ -2974,6 +3012,20 @@ impl Vm {
                                 }
                                 return Err(e);
                             }
+                        }
+                        Flow::Next
+                    }
+                    Op::Match { subject, table } if table.switch => {
+                        // `ZEND_SWITCH_LONG` / `ZEND_SWITCH_STRING`: the
+                        // subject dereferenced; an undefined CV (no
+                        // warning here: the `case` comparisons warn) and
+                        // a value of another type go on to the next op.
+                        let v = match *subject {
+                            Operand::Cv(cv) => self.read_cv_defined(cv),
+                            o => Some(self.read(o)?.deref()),
+                        };
+                        if let Some(to) = v.as_ref().and_then(|v| table.switch_target(v)) {
+                            ip = to as usize;
                         }
                         Flow::Next
                     }
@@ -3434,7 +3486,7 @@ impl Vm {
     }
 
     fn array_literal_add(&mut self, arr: u32, key: Option<Value>, v: Value) -> VmResult<()> {
-        let mut a = std::mem::take(&mut self.frame_mut().tmps[arr as usize]);
+        let mut a = std::mem::take(&mut self.frame_mut().slots.tmps_mut()[arr as usize]);
         let res = (|| -> VmResult<()> {
             let Value::Array(za) = &mut a else {
                 return Ok(());
@@ -3457,7 +3509,7 @@ impl Vm {
             }
             Ok(())
         })();
-        self.frame_mut().tmps[arr as usize] = a;
+        self.frame_mut().slots.tmps_mut()[arr as usize] = a;
         res
     }
 
@@ -3469,7 +3521,7 @@ impl Vm {
         let referenceable = match self.frame().code.places[pid as usize].base {
             crate::opcode::PlaceBase::Value(
                 crate::opcode::Operand::Tmp(t) | crate::opcode::Operand::TmpKeep(t),
-            ) => matches!(self.frame().tmps[t as usize], Value::Reference(_)),
+            ) => matches!(self.frame().slots.tmps()[t as usize], Value::Reference(_)),
             _ => true,
         };
         if referenceable {
@@ -3505,7 +3557,7 @@ impl Vm {
     fn array_unpack(&mut self, arr: u32, src: Value) -> VmResult<()> {
         match src {
             Value::Array(s) => {
-                let mut a = std::mem::take(&mut self.frame_mut().tmps[arr as usize]);
+                let mut a = std::mem::take(&mut self.frame_mut().slots.tmps_mut()[arr as usize]);
                 if let Value::Array(za) = &mut a {
                     let t = za.make_mut();
                     for (k, v) in s.iter() {
@@ -3513,7 +3565,7 @@ impl Vm {
                         match k {
                             php_runtime::ArrayKey::Int(_) => {
                                 if t.push(v).is_err() {
-                                    self.frame_mut().tmps[arr as usize] = a;
+                                    self.frame_mut().slots.tmps_mut()[arr as usize] = a;
                                     return Err(self.make_throw(
                                         "Error",
                                         "Cannot add element to the array as the next element is already occupied",
@@ -3526,7 +3578,7 @@ impl Vm {
                         }
                     }
                 }
-                self.frame_mut().tmps[arr as usize] = a;
+                self.frame_mut().slots.tmps_mut()[arr as usize] = a;
                 Ok(())
             }
             Value::Object(o) if self.instance_of(&o, b"traversable") => {
@@ -3569,7 +3621,7 @@ impl Vm {
                 ));
             }
         };
-        let Some(Value::Array(za)) = self.frame_mut().tmps.get_mut(arr as usize) else {
+        let Some(Value::Array(za)) = self.frame_mut().slots.tmps_mut().get_mut(arr as usize) else {
             return Ok(());
         };
         let t = za.make_mut();
@@ -3640,15 +3692,16 @@ impl Vm {
     /// Runs the destructors of objects released since the last check.
     pub(crate) fn run_pending_destructors(&mut self) -> VmResult<()> {
         loop {
-            let pending = object::take_pending_destructors();
+            let mut pending = object::take_pending_destructors();
             if pending.is_empty() {
+                object::return_pending_buffer(pending);
                 return Ok(());
             }
             // `zend_objects_destroy_object`: a destructor runs with the
             // pending exception set aside; a new exception gets the pending
             // one as its innermost `previous`.
             let mut pending_err: Option<Throw> = None;
-            for o in pending {
+            for o in pending.drain(..) {
                 if let Err(e) = self.call_destructor(&o) {
                     pending_err = Some(match (pending_err.take(), e) {
                         (Some(Throw::Exception(old)), Throw::Exception(new)) => {
@@ -3666,6 +3719,7 @@ impl Vm {
                 drop(o);
                 object::release_deferred_handles(h);
             }
+            object::return_pending_buffer(pending);
             if let Some(e) = pending_err {
                 return Err(e);
             }
@@ -3741,7 +3795,15 @@ impl Vm {
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
         if self.frames[fidx].generator().is_some() {
-            let frame = self.frames.pop().expect("frame");
+            // The frame leaves in its box, the released frame it took the
+            // place of back in its place.
+            let spare = self.frames[fidx]
+                .generator()
+                .and_then(crate::generator::take_spare);
+            let frame = self
+                .frames
+                .pop_boxed(spare, &self.empty_code, &self.empty_vars)
+                .expect("frame");
             if let Some(g) = frame.generator() {
                 crate::generator::finish_with(g, v);
             }
@@ -3776,8 +3838,7 @@ impl Vm {
         let (ret, by_ref) = {
             let frame = &self.frames[fidx];
             let by_ref = frame
-                .ufunc
-                .as_ref()
+                .ufunc()
                 .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
             (frame.ret, by_ref)
         };
@@ -4225,8 +4286,13 @@ impl Vm {
     #[inline(never)]
     fn return_undefined_typed_cv(&mut self, cv: u32) -> VmResult<Option<Value>> {
         let f = self.frame();
-        let defined = f.cvs.get(cv as usize).and_then(CvSlot::get).is_some();
-        let Some(uf) = f.ufunc.as_ref() else {
+        let defined = f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(CvSlot::get)
+            .is_some();
+        let Some(uf) = f.ufunc() else {
             return Ok(None);
         };
         if defined || uf.flags & crate::func::flags::GENERATOR != 0 {

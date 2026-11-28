@@ -550,8 +550,8 @@ fn enter_stack(vm: &mut Vm) -> VmResult<StackLevel> {
         s.0.saturating_sub(here)
     });
     let level = StackLevel;
-    let max = vm.ini_long("zend.max_allowed_stack_size");
-    let reserved = usize::try_from(vm.ini_long("zend.reserved_stack_size")).unwrap_or(0);
+    let (max, reserved) = vm.stack_size_inis();
+    let reserved = usize::try_from(reserved).unwrap_or(0);
     let budget = usize::try_from(max)
         .ok()
         .filter(|&m| m > 0)
@@ -641,7 +641,7 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // Streams of SplFileObject & co. may be user wrappers: run with
         // the VM lent to the stream layer.
         return crate::files::run_bridged(vm, |host| {
-            php_spl::call_method(host, t.class, t.def.name, this.as_ref(), &args)
+            php_spl::call_method_canonical(host, t.class, t.def.name, this.as_ref(), &args)
         });
     }
     if t.def.name == "unserialize" {
@@ -651,7 +651,7 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return vm.with_unserialize_context(|vm| {
             let r = {
                 let mut host = VmHost::new(vm);
-                php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
+                php_spl::call_method_canonical(&mut host, t.class, t.def.name, this.as_ref(), &args)
             };
             crate::iter::finish(vm, r)
         });
@@ -662,7 +662,7 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         } else {
             VmHost::new(vm)
         };
-        php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
+        php_spl::call_method_canonical(&mut host, t.class, t.def.name, this.as_ref(), &args)
     };
     crate::iter::finish(vm, r)
 }

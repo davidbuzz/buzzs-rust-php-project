@@ -133,7 +133,7 @@ impl CallerSymbols {
             match self.direct_frame(vm) {
                 Some(f) => {
                     if let Some(i) = cv_of(f, name.as_bytes()) {
-                        return match f.cvs.get(i).and_then(CvSlot::get) {
+                        return match f.slots.cvs().get(i).and_then(CvSlot::get) {
                             Some(v) => VarSlot::Defined(v.clone()),
                             None => VarSlot::Undefined,
                         };
@@ -159,7 +159,8 @@ impl CallerSymbols {
                 self.write_table(name, value, assign);
                 return;
             };
-            let Some(slot) = cv_of(f, name.as_bytes()).and_then(|i| f.cvs.get_mut(i)) else {
+            let Some(slot) = cv_of(f, name.as_bytes()).and_then(|i| f.slots.cvs_mut().get_mut(i))
+            else {
                 self.attach(vm);
                 self.write_table(name, value, assign);
                 return;

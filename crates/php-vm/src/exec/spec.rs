@@ -60,7 +60,7 @@ pub(super) use dims::{
 pub(super) use dyncalls::init_dyn_method_call_in;
 pub(super) use props::{
     assign_prop_dim_in, concat_prop_in, fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean,
-    isset_prop_dim_in, prop_op_in, read_hit,
+    is_miss_hit, isset_prop_dim_in, prop_op_in, read_hit,
 };
 pub(super) use refs::step_ref;
 pub(super) use static_dims::{assign_static_dims_in, fetch_static_dims_in, isset_static_dims_in};
@@ -160,13 +160,13 @@ fn string_offset_char(s: &ZStr, offset: i64) -> Option<Value> {
 #[inline]
 pub(super) fn operand_simple(f: &Frame, op: Operand) -> Option<&Value> {
     let v = match op {
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
         Operand::Tmp(t) => {
-            let v = f.tmps.get(t as usize)?;
+            let v = f.slots.tmps().get(t as usize)?;
             return is_plain_value(v).then_some(v);
         }
-        Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
         Operand::Unused => return None,
     };
     match v {
@@ -259,7 +259,7 @@ pub(super) fn put_tmp(slot: &mut Value, v: Value) {
 #[allow(clippy::inline_always)]
 fn dim_int_in(f: &Frame, dim: Operand) -> Option<i64> {
     match dim {
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get) {
+        Operand::Cv(cv) => match f.slots.cvs().get(cv as usize).and_then(CvSlot::get) {
             Some(Value::Int(i)) => Some(*i),
             Some(Value::Reference(r)) => match &*r.try_borrow()? {
                 Value::Int(i) => Some(*i),
@@ -267,7 +267,7 @@ fn dim_int_in(f: &Frame, dim: Operand) -> Option<i64> {
             },
             _ => None,
         },
-        Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
             Some(Value::Int(i)) => Some(*i),
             _ => None,
         },
@@ -290,7 +290,7 @@ fn dim_int_in(f: &Frame, dim: Operand) -> Option<i64> {
 #[allow(clippy::inline_always)] // hot dimension-key extraction in the dispatch pre-match
 fn dim_key_in(f: &Frame, dim: Operand) -> Option<ArrayKey> {
     match dim {
-        Operand::Tmp(t) | Operand::TmpKeep(t) => plain_key(f.tmps.get(t as usize)),
+        Operand::Tmp(t) | Operand::TmpKeep(t) => plain_key(f.slots.tmps().get(t as usize)),
         Operand::Lit(i) => plain_key(f.code.literals.get(i as usize)),
         Operand::Cv(cv) => f.peek_cv(cv, plain_key),
         Operand::Unused => None,
@@ -312,9 +312,9 @@ enum DimRef<'a> {
 #[allow(clippy::inline_always)] // hot offset peek of the array-dimension fast paths
 fn dim_ref_in(f: &Frame, dim: Operand) -> Option<DimRef<'_>> {
     let v = match dim {
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?,
         Operand::Unused => return None,
     };
     match v {
@@ -356,7 +356,7 @@ fn table_dim_mut<'t>(arr: &'t mut HashTable, d: DimRef<'_>) -> Option<&'t mut Va
 #[allow(clippy::inline_always)] // hot array-dimension read in the dispatch pre-match
 fn cv_dim_hit_in(f: &Frame, cv: u32, dim: Operand) -> Option<Value> {
     let d = dim_ref_in(f, dim)?;
-    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
+    let slot = f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let arr = match slot {
         Value::Array(a) => a,
@@ -381,7 +381,7 @@ fn cv_dim_hit_in(f: &Frame, cv: u32, dim: Operand) -> Option<Value> {
 #[allow(clippy::inline_always)] // hot FREE_OP2 string-temp release in the dispatch pre-match
 pub(super) fn release_str_tmp_in(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             if matches!(slot, Value::Str(_)) {
                 *slot = Value::Null;
             }
@@ -404,17 +404,21 @@ pub(in crate::exec) fn store_fetched_in(
 ) -> bool {
     if let Some(to) = to {
         let idx = to as usize;
-        if f.cvs.get(idx).is_some_and(|slot| is_plain_slot(slot.get())) {
+        if f.slots
+            .cvs()
+            .get(idx)
+            .is_some_and(|slot| is_plain_slot(slot.get()))
+        {
             // The table's mirror first (it only touches the table), so
             // the value moves into the slot without a clone.
             f.sync_cv_to_symtab(to, &v);
-            let old = f.cvs[idx].set(Some(v));
+            let old = f.slots.cvs_mut()[idx].set(Some(v));
             // A scalar is forgotten; a string is released.
             discard_unrooted(old);
             return true;
         }
     }
-    put_tmp(&mut f.tmps[dst as usize], v);
+    put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
     false
 }
 
@@ -425,7 +429,7 @@ pub(in crate::exec) fn store_fetched_in(
 #[inline]
 fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
     let segs = &f.code.places.get(place as usize)?.segs;
-    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
+    let slot = f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let mut cur = match slot {
         Value::Reference(r) => {
@@ -569,19 +573,19 @@ impl Frame {
             ArgPlace::Static => statics::static_prop_value_in(self, pid),
             ArgPlace::TmpDims(t) => {
                 let v = {
-                    let Value::Array(a) = self.tmps.get(t as usize)? else {
+                    let Value::Array(a) = self.slots.tmps().get(t as usize)? else {
                         return None;
                     };
                     if a.refcount() < 2 {
                         return None;
                     }
                     let segs = &self.code.places.get(pid as usize)?.segs;
-                    dims_value_of(self, &self.tmps[t as usize], segs)?
+                    dims_value_of(self, &self.slots.tmps()[t as usize], segs)?
                 };
                 release_place_str_tmps(self, pid);
                 // Another handle holds the array: this release only
                 // drops a count.
-                drop(std::mem::take(&mut self.tmps[t as usize]));
+                drop(std::mem::take(&mut self.slots.tmps_mut()[t as usize]));
                 Some(v)
             }
         }
@@ -596,7 +600,7 @@ impl Frame {
 fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
     match op {
         Operand::Tmp(t) | Operand::TmpKeep(t) => {
-            let v = f.tmps.get(t as usize)?;
+            let v = f.slots.tmps().get(t as usize)?;
             is_plain_value(v).then(|| copy_value(v))
         }
         Operand::Lit(i) => {
@@ -619,8 +623,8 @@ fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
 #[allow(clippy::inline_always)] // hot OP_DATA operand read for AssignDimCv
 pub(super) fn dim_value_in(f: &Frame, op: Operand) -> Option<Value> {
     let v = match op {
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?,
         Operand::Lit(_) | Operand::Unused => return plain_value_in(f, op),
     };
     match v {
@@ -663,7 +667,7 @@ fn release_place_str_tmps(f: &mut Frame, place: PlaceId) {
     };
     for seg in &p.segs {
         if let Seg::Dim(Operand::Tmp(t)) = seg {
-            if let Some(slot) = f.tmps.get_mut(*t as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(*t as usize) {
                 if matches!(slot, Value::Str(_)) {
                     *slot = Value::Null;
                 }
@@ -775,7 +779,7 @@ fn concat_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], add: &Value) -> b
 #[inline]
 fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
     let key = dim_ref_in(f, dim)?;
-    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
+    let slot = f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let arr = match slot {
         Value::Array(a) => a,
@@ -867,7 +871,7 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
 #[inline]
 fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
     if let Operand::Tmp(t) = op {
-        match f.tmps.get(t as usize) {
+        match f.slots.tmps().get(t as usize) {
             Some(v @ Value::Array(a)) => return (a.refcount() > 1 || a.is_empty()).then_some(v),
             // Another holder keeps it alive: its release runs no destructor.
             Some(v @ Value::Object(o)) => return (o.refcount() > 1).then_some(v),
@@ -882,7 +886,7 @@ fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
 #[inline]
 fn release_cmp_tmp(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             if matches!(slot, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
                 *slot = Value::Null;
             }
@@ -932,7 +936,7 @@ impl Vm {
     pub(super) fn cv_store_plain(&mut self, cv: u32, v: Value) -> Result<(), Value> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let Some(slot) = f.cvs.get_mut(idx) else {
+        let Some(slot) = f.slots.cvs_mut().get_mut(idx) else {
             return Err(v);
         };
         if !is_plain_slot(slot.get()) {
@@ -1007,7 +1011,7 @@ impl Vm {
                     return None;
                 }
                 let main = self.frames.first()?;
-                let slot = main.cvs.get(cv as usize)?;
+                let slot = main.slots.cvs().get(cv as usize)?;
                 Some(slot.get().map_or_else(undefined, |v| Some(v.deref())))
             }
             GlobalSlot::GlobalStore(idx) => {
@@ -1046,11 +1050,10 @@ impl Vm {
         dst: u32,
         to: Option<u32>,
     ) -> Option<bool> {
-        let live = self.frames.live;
+        let live = self.frames.len();
         let slot = *self
             .frames
-            .vec
-            .get(live.checked_sub(1)?)?
+            .pooled(live.checked_sub(1)?)?
             .code
             .rt_cache
             .globals
@@ -1070,7 +1073,7 @@ impl Vm {
                 if !self.main_is_global_top() {
                     return None;
                 }
-                fetched(self.frames.vec.first()?.cvs.get(cv as usize)?.get())?
+                fetched(self.frames.pooled(0)?.slots.cvs().get(cv as usize)?.get())?
             }
             GlobalSlot::GlobalStore(idx) => {
                 let g = self.globals.try_borrow().ok()?;
@@ -1078,18 +1081,19 @@ impl Vm {
             }
             GlobalSlot::Empty => return None,
         };
-        let f = self.frames.vec.get_mut(live - 1)?;
+        let f = self.frames.pooled_mut(live - 1)?;
         if let Some(to) = to {
-            if f.cvs
+            if f.slots
+                .cvs()
                 .get(to as usize)
                 .is_some_and(|slot| !matches!(slot.get(), Some(Value::Reference(_))))
             {
                 f.sync_cv_to_symtab(to, &v);
-                super::release_slot_value(f.cvs[to as usize].set(Some(v)));
+                super::release_slot_value(f.slots.cvs_mut()[to as usize].set(Some(v)));
                 return Some(true);
             }
         }
-        put_tmp(f.tmps.get_mut(dst as usize)?, v);
+        put_tmp(f.slots.tmps_mut().get_mut(dst as usize)?, v);
         Some(false)
     }
 
@@ -1157,7 +1161,7 @@ impl Vm {
                 cv
             }
         };
-        let v = props::dims_read(f, main.cvs.get(cv as usize)?.get()?, segs)?;
+        let v = props::dims_read(f, main.slots.cvs().get(cv as usize)?.get()?, segs)?;
         release_place_str_tmps(self.frame_mut(), pid);
         Some(v)
     }
@@ -1203,7 +1207,7 @@ impl Vm {
                 GlobalSlot::GlobalCv(_) if !main_top => {}
                 GlobalSlot::GlobalCv(cv) => {
                     let main_frame = self.frames.first()?;
-                    let slot = main_frame.cvs.get(cv as usize)?;
+                    let slot = main_frame.slots.cvs().get(cv as usize)?;
                     return match slot.get() {
                         Some(v) => Some(v.deref()),
                         None if mode == FetchMode::Is => Some(Value::Null),
@@ -1230,14 +1234,14 @@ impl Vm {
                 _ => return None,
             },
             Operand::Cv(cv) => {
-                let slot = self.frame().cvs.get(cv as usize)?;
+                let slot = self.frame().slots.cvs().get(cv as usize)?;
                 match slot.get()? {
                     Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
                     Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
                     _ => return None,
                 }
             }
-            Operand::Tmp(t) => match self.frame().tmps.get(t as usize)? {
+            Operand::Tmp(t) => match self.frame().slots.tmps().get(t as usize)? {
                 Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
                 Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
                 _ => return None,
@@ -1276,7 +1280,7 @@ impl Vm {
                         cache[pid as usize] = GlobalSlot::GlobalCv(cv);
                     }
 
-                    if let Some(slot) = main_frame.cvs.get(cv as usize) {
+                    if let Some(slot) = main_frame.slots.cvs().get(cv as usize) {
                         if let Some(v) = slot.get() {
                             return Some(v.deref());
                         }
@@ -1344,7 +1348,7 @@ impl Vm {
             _ => return false,
         };
         let idx = cv as usize;
-        let Some(slot) = f.cvs.get(idx) else {
+        let Some(slot) = f.slots.cvs().get(idx) else {
             return false;
         };
         // SAFETY: no other reference into the slot is alive: the keys and
@@ -1369,7 +1373,7 @@ impl Vm {
         }
         release_place_str_tmps(f, place);
         if let Operand::Tmp(t) = val {
-            put_tmp(&mut f.tmps[t as usize], Value::Null);
+            put_tmp(&mut f.slots.tmps_mut()[t as usize], Value::Null);
         }
         true
     }
@@ -1387,8 +1391,8 @@ impl Vm {
     pub(super) fn peek_object_value(&self, op: Operand) -> Option<Value> {
         let f = self.frame();
         let v = match op {
-            Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
-            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+            Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
+            Operand::Cv(cv) => f.slots.cvs().get(cv as usize)?.get()?,
             Operand::Lit(_) | Operand::Unused => return None,
         };
         match v {

@@ -1043,10 +1043,14 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("getModifiers(): int", PUB, rp_get_modifiers)
         .method(
             "getDeclaringClass(): ReflectionClass",
-            PUB,
+            PUB | flags::PURE,
             rp_get_declaring_class,
         )
-        .method("getDocComment(): string|false", PUB, rp_get_doc_comment)
+        .method(
+            "getDocComment(): string|false",
+            PUB | flags::PURE,
+            rp_get_doc_comment,
+        )
         .method(
             "setAccessible(bool $accessible): void",
             PUB,
