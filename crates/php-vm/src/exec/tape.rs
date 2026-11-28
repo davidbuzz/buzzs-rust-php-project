@@ -124,6 +124,9 @@ pub(crate) struct Tape {
     /// (`Inst.p`): see [`calls::NewSite`]. Grown outside the counted heap,
     /// like the op array's other run-time caches.
     new_sites: std::cell::RefCell<Vec<calls::NewSite>>,
+    /// The call plans of this tape's [`calls::CALL_PLAN`] instructions, by
+    /// op index (see [`calls::Plan`]).
+    plans: OnceCell<Box<[calls::PlanSlot]>>,
 }
 
 impl Tape {
@@ -133,6 +136,16 @@ impl Tape {
         self.insts.get_or_init(|| {
             php_memlimit::persistent(|| {
                 let tape = lower(code);
+                // A slot per call site that may get a plan.
+                let sites = tape
+                    .iter()
+                    .filter(|i| i.op == TOp::CallInit && i.k == calls::CALL_PLAN)
+                    .count();
+                if sites != 0 {
+                    let _ = self
+                        .plans
+                        .set((0..sites).map(|_| OnceCell::new()).collect());
+                }
                 // Tables only for a tape that has a loop the JIT could
                 // ever compile: without them `run_tape` picks the core
                 // without the back-edge hook for every frame of it.
@@ -1897,6 +1910,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     tape.push(Inst::plain(TOp::Exit));
     dims::shape_literals(code, &mut tape);
     calls::number_new_sites(&mut tape);
+    calls::number_plan_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a
     // specialised instruction when the tape also runs what follows it.
@@ -2107,7 +2121,20 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     WHY_CALL => {
                         // SAFETY: `out.ip` points into the tape (the
                         // instruction that stopped the core).
-                        let next = run_call(vm, &mut prep, ops, lits, at, unsafe { &*out.ip });
+                        // A call site with a plan: the whole call, from
+                        // its init to the callee's first op.
+                        // SAFETY: `out.ip` points into the tape.
+                        let site = unsafe { (*out.ip).p };
+                        let planned = unsafe { (*out.ip).k } == calls::CALL_PLAN
+                            && prep.is_none()
+                            && calls::has_plan(c, site)
+                            && calls::call_plain(vm, c, at, site);
+                        let next = if planned {
+                            ENTERED
+                        } else {
+                            // SAFETY: as above.
+                            run_call(vm, &mut prep, c, ops, lits, at, unsafe { &*out.ip })
+                        };
                         if next == ENTERED {
                             // The call was entered: the tape goes on in the
                             // callee's frame, as after an entered `DoCall`
@@ -2341,7 +2368,10 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             Some(&Op::Return { val }) => {
                 flush(vm, &mut prep);
                 fresh = false;
-                vm.return_simple(val, base, at + 1).is_some()
+                // (The mark is tested here: a frame without it pays no
+                // call for the attempt.)
+                (vm.frames.last().is_some_and(|f| f.plain) && vm.return_plain(val, base, at + 1))
+                    || vm.return_simple(val, base, at + 1).is_some()
             }
             _ => false,
         };
@@ -2427,6 +2457,7 @@ fn flush_cold(vm: &mut Vm, prep: &mut Option<calls::Prepared>) {
 fn run_call(
     vm: &mut Vm,
     prep: &mut Option<calls::Prepared>,
+    code: &OpArray,
     ops: &[Op],
     lits: &[Value],
     at: usize,
@@ -2439,6 +2470,11 @@ fn run_call(
             ..
         }) => {
             flush(vm, prep);
+            // A site that may get a call plan (a namespaced user function):
+            // worked out once its cache is filled.
+            if inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_fcall(code, at, inst.p);
+            }
             if let Some(call) = calls::prepare_ns(vm, name, lits.len() + at + 1) {
                 // A leaf builtin with plain arguments: called at once.
                 if call.is_native() {
@@ -2451,6 +2487,9 @@ fn run_call(
         }
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
+            if inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_fcall(code, at, inst.p);
+            }
             // `f(<expression>)` of a builtin that needs no handler: nothing
             // to ready; its `Send` makes the call.
             if inst.k == calls::CALL_QUICK {
@@ -2504,6 +2543,13 @@ fn run_call(
                 if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
                     return next;
                 }
+            } else if inst.k == calls::CALL_PLAN
+                && site_accessor == 1
+                && calls::plan_missing(code, inst.p)
+            {
+                // A site that may get a call plan (a user method that is
+                // no accessor): worked out for this object's class.
+                plan_method_site(vm, code, obj, lit, at, inst.p);
             }
             if let Some(call) = calls::prepare_method(vm, obj, lit, at, resolved) {
                 return send_and_enter(vm, prep, call, ops, at);
@@ -2567,6 +2613,11 @@ fn run_call(
                 (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
                 _ => None,
             };
+            // A site that may get a call plan: worked out once its cache
+            // holds what this call resolved.
+            if call.is_some() && inst.k == calls::CALL_PLAN && calls::plan_missing(code, inst.p) {
+                calls::plan_build_static(code, at, inst.p);
+            }
             return match call {
                 Some(call) => send_and_enter(vm, prep, call, ops, at),
                 None => DECLINED,
@@ -2647,6 +2698,33 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// Works out the call plan of the method call site at `at` for the class
+/// of the object `obj` holds now and the calling scope
+/// ([`calls::plan_build_method`]).
+#[cold]
+#[inline(never)]
+fn plan_method_site(vm: &Vm, code: &OpArray, obj: Operand, lit: u32, at: usize, site: usize) {
+    let Some(f) = vm.frames.last() else {
+        return;
+    };
+    let o = match obj {
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.tmps.get(t as usize),
+        _ => None,
+    };
+    let o = match (obj, o) {
+        (Operand::Unused, _) => f.this.as_ref(),
+        (_, Some(Value::Object(o))) => Some(o),
+        _ => None,
+    };
+    let Some(o) = o else {
+        return;
+    };
+    let cls_addr = Rc::as_ptr(crate::object::class_of(o)) as usize;
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    calls::plan_build_method(code, at, site, obj, cls_addr, scope_addr, lit);
 }
 
 /// `$obj->$name()` (`Op::InitMethodCall` with a variable or temporary

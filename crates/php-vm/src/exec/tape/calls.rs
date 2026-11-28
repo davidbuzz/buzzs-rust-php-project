@@ -108,6 +108,23 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             d: u32::try_from(i).ok()?,
             ..plain(TOp::CallInit)
         }),
+        // A function called by name or a method called on an object, with
+        // plain arguments: the site may get a call plan ([`call_plain`]).
+        op @ (Op::InitFCall { .. }
+        | Op::InitMethodCall {
+            obj: Operand::Cv(_) | Operand::Tmp(_) | Operand::Unused,
+            name: Operand::Lit(_),
+        }
+        | Op::InitStaticCall {
+            class:
+                ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
+            name: Operand::Lit(_),
+        }) if preparable(op) && stays_prepared(code, i) && plan_sends(code, i).is_some() => {
+            Some(Inst {
+                k: CALL_PLAN,
+                ..plain(TOp::CallInit)
+            })
+        }
         op if preparable(op) && stays_prepared(code, i) => Some(plain(TOp::CallInit)),
         // `$obj->$name()`: started on the site's method cache hit
         // (`spec::init_dyn_method_call_in`, from `run_call`) as a pending
@@ -362,6 +379,771 @@ pub(super) const CALL_QUICK: u8 = 1;
 /// The mark of a `CallInit` instruction that is a `new C` the core loop
 /// tries itself ([`new_plain`]).
 pub(super) const CALL_NEW: u8 = 2;
+
+/// The mark of a `CallInit` instruction whose call site may have a call
+/// plan ([`Plan`], [`call_plain`]).
+pub(super) const CALL_PLAN: u8 = 3;
+
+/// The most arguments a call plan passes.
+const PLAN_ARGS: usize = 6;
+/// The further classes a method's plan takes ([`Plan::more`]).
+const PLAN_CLASSES: usize = 3;
+/// [`Plan::kinds`]: the argument is a compiled variable of the caller.
+const PLAN_CV: u8 = 0;
+/// [`Plan::kinds`]: the argument is a literal of the caller's code.
+const PLAN_LIT: u8 = 1;
+/// [`Plan::kinds`]: the argument is a temporary of the caller, moved out.
+const PLAN_TMP: u8 = 2;
+/// [`Plan::kinds`]: the argument is a place of the caller read by value
+/// (`$this->p`, `$a['k']`, a chain of them; [`plan_reads_place`]).
+const PLAN_PLACE: u8 = 3;
+/// [`Plan::kinds`]: the argument is `$this`.
+const PLAN_THIS: u8 = 4;
+
+/// What a planned call site is.
+#[derive(Clone, PartialEq)]
+enum PlanKind {
+    /// A function called by name.
+    Function,
+    /// `$obj->name()`: the object operand.
+    Method(Operand),
+    /// `Name::name()` of a static method.
+    Static,
+    /// `self::name()`, `parent::name()`, `static::name()`.
+    Relative(ClassSpec),
+}
+
+/// What a call site calls and how, worked out once: a function called
+/// by name, a method called on an object or a static call, of a plain
+/// declaration, each argument passed by value from a compiled variable,
+/// a literal, a temporary, `$this` or a place read on its specialised
+/// hit.
+///
+/// A prepared call decides the same things on every call, in each of the
+/// functions it passes through (`prepare*`, `send_run`, `enter`, then
+/// `return_simple`): of a plain call's ~870 instructions about 280 are
+/// compares and branches and 50 are stores. A plan decides them when the
+/// site first makes a prepared call, and [`call_plain`] then runs the
+/// call as one sequence behind one guard (the object's class and the
+/// calling scope for a method, nothing for a resolved function); the
+/// frame it enters carries the mark ([`crate::vm::Frame::plain`]) that
+/// lets `Vm::return_plain` release it without `return_simple`'s tests.
+/// Whatever a plan does not take (an undefined or by-reference variable,
+/// a value its parameter's type would coerce or refuse, an object of a
+/// class the site has no plan for) is handed back untouched to the
+/// prepared call, which keeps every diagnostic and rare shape.
+///
+/// A function call went from 868 to about 570 instructions with it, a
+/// method call from 1,071 to about 740 (PHP 8.5: 132 and 178).
+pub(super) struct Plan {
+    /// What the site is.
+    kind: PlanKind,
+    /// The callee.
+    uf: std::rc::Weak<UserFunction>,
+    /// Its address, for the test against the function the pooled frame
+    /// kept.
+    uf_addr: usize,
+    /// The number of arguments.
+    n: u8,
+    /// Whether a parameter declares a type (each argument is then tested
+    /// against its parameter's).
+    typed: bool,
+    /// Whether the call passes fewer arguments than the callee declares
+    /// (the others take their defaults, [`bind_literal_defaults`]).
+    defaults: bool,
+    /// Whether the method is static (no `$this`).
+    is_static: bool,
+    /// Whether an argument is read from a place or is `$this`
+    /// ([`PLAN_PLACE`], [`PLAN_THIS`]).
+    fetches: bool,
+    /// Where each argument comes from.
+    kinds: [u8; PLAN_ARGS],
+    /// Its slot or literal index.
+    idx: [u32; PLAN_ARGS],
+    /// The caller's temporary the result goes to.
+    dst: Option<u32>,
+    /// The callee's first op after the `RECV`s of the passed arguments.
+    first_op: usize,
+    /// The caller's op after the `DoCall`.
+    done: usize,
+    /// A method's or a relative static call's: the address of the class
+    /// the plan is for (the object's, or the one the spec resolved to)
+    /// and of the calling scope.
+    class_addr: usize,
+    /// See `class_addr`.
+    scope_addr: usize,
+    /// Further classes whose objects the site saw and whose method is the
+    /// same one (an inherited method called on several subclasses), held
+    /// weakly so that their addresses stay theirs.
+    more: [std::cell::RefCell<Option<std::rc::Weak<crate::class::Class>>>; PLAN_CLASSES],
+    /// A method's class scope.
+    method_scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// The called class of `Name::name()`.
+    called: Option<std::rc::Weak<crate::class::Class>>,
+}
+
+/// What [`plan_store`] is told about a site's callee.
+struct PlanCallee {
+    kind: PlanKind,
+    uf: Rc<UserFunction>,
+    is_static: bool,
+    class_addr: usize,
+    scope_addr: usize,
+    method_scope: Option<std::rc::Weak<crate::class::Class>>,
+    called: Option<std::rc::Weak<crate::class::Class>>,
+}
+
+/// The arguments of the call started at `i`, when a plan can pass them:
+/// each a compiled variable, a literal or a temporary, by value, at most
+/// [`PLAN_ARGS`], then the `DoCall`.
+#[allow(clippy::type_complexity)]
+fn plan_sends(
+    code: &OpArray,
+    i: usize,
+) -> Option<(usize, [u8; PLAN_ARGS], [u32; PLAN_ARGS], Option<u32>)> {
+    let mut kinds = [0u8; PLAN_ARGS];
+    let mut idx = [0u32; PLAN_ARGS];
+    let mut n = 0;
+    loop {
+        match code.ops.get(i + 1 + n)? {
+            Op::DoCall { dst } => return Some((n, kinds, idx, *dst)),
+            Op::Send { src } if n < PLAN_ARGS => {
+                let (k, x) = match src {
+                    ArgSrc::Val(Operand::Cv(cv)) => (PLAN_CV, *cv),
+                    ArgSrc::Val(Operand::Lit(l)) => (PLAN_LIT, *l),
+                    ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
+                        (PLAN_TMP, *t)
+                    }
+                    ArgSrc::Place(pid) => match place_cv(code, *pid) {
+                        Some(cv) => (PLAN_CV, cv),
+                        None if this_place(code, *pid) => (PLAN_THIS, 0),
+                        None if plan_reads_place(code, *pid) => (PLAN_PLACE, *pid),
+                        None => return None,
+                    },
+                    _ => return None,
+                };
+                kinds[n] = k;
+                idx[n] = x;
+                n += 1;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Whether a plan may read place `pid` as an argument: a variable or
+/// `$this` followed by dimensions keyed by literals or variables and
+/// properties named by literals. Reading such a place on its specialised
+/// hit ([`crate::vm::Frame::send_place_hit`]) consumes no temporary, so a
+/// plan that then hands the call back has changed nothing.
+fn plan_reads_place(code: &OpArray, pid: u32) -> bool {
+    code.places.get(pid as usize).is_some_and(|p| {
+        matches!(p.base, PlaceBase::Cv(_) | PlaceBase::This)
+            && !p.segs.is_empty()
+            && p.segs.iter().all(|seg| {
+                matches!(
+                    seg,
+                    crate::opcode::Seg::Dim(Operand::Lit(_) | Operand::Cv(_))
+                        | crate::opcode::Seg::Prop(Operand::Lit(_))
+                )
+            })
+    })
+}
+
+/// Whether a plan can call `uf` with `n` arguments: a plain declaration
+/// (typed or not) without static variables, every required parameter
+/// passed and none past the declared ones.
+fn plan_takes(uf: &UserFunction, n: usize) -> bool {
+    matches!(uf.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
+        && uf.code.num_statics == 0
+        && uf.flags & (flags::RETURN_REF | flags::GENERATOR) == 0
+        && n >= uf.required as usize
+        && n <= uf.params.len()
+        && uf.code.cv_names.len() >= uf.params.len()
+}
+
+/// A call site's plan: unset until the site is looked at, then its plan
+/// or none.
+pub(super) type PlanSlot = std::cell::OnceCell<Option<Box<Plan>>>;
+
+/// Gives every [`CALL_PLAN`] instruction of `tape` its site number in `p`
+/// (the index of its [`PlanSlot`]); returns how many there are.
+pub(super) fn number_plan_sites(tape: &mut [Inst]) -> usize {
+    let mut n = 0;
+    for inst in tape.iter_mut() {
+        if inst.op == TOp::CallInit && inst.k == CALL_PLAN {
+            inst.p = n;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// The slot of plan site `site` of `code`'s tape.
+#[inline(always)]
+#[allow(clippy::inline_always)] // two loads
+fn plan_slot(code: &OpArray, site: usize) -> Option<&PlanSlot> {
+    code.tape.plans.get()?.get(site)
+}
+
+/// Whether plan site `site` has a plan: tested in line where the core
+/// loop's call exit is handled, so that a site without one (an
+/// accessor's, a builtin's) pays three loads and not a call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per call exit
+pub(super) fn has_plan(code: &OpArray, site: usize) -> bool {
+    plan_slot(code, site)
+        .and_then(std::cell::OnceCell::get)
+        .is_some_and(Option::is_some)
+}
+
+/// Whether plan site `site` has not been looked at for a plan yet.
+#[inline]
+pub(super) fn plan_missing(code: &OpArray, site: usize) -> bool {
+    plan_slot(code, site).is_some_and(|slot| slot.get().is_none())
+}
+
+/// Stores the plan of the call site at `at` for `callee`, or the mark
+/// that the site gets none.
+#[cold]
+#[inline(never)]
+fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>) {
+    let Some(slot) = plan_slot(code, site) else {
+        return;
+    };
+    let Some((n, kinds, idx, dst)) = plan_sends(code, at) else {
+        return;
+    };
+    // A function the JIT may still compile whole (`compiled`, which only
+    // the prepared call tries, counts its calls first): the site is
+    // looked at again once that is settled, and a function that runs as
+    // machine code gets no plan.
+    if let Some(c) = &callee {
+        let native = c.uf.call_shape.native.get();
+        // (Only a call that passes every declared parameter is counted
+        // towards that decision.)
+        if native == 0
+            && super::jit::enabled()
+            && n == c.uf.params.len()
+            && n <= super::jit::NATIVE_MAX_ARGS
+        {
+            return;
+        }
+        if native > super::jit::NATIVE_REFUSED {
+            let _ = slot.set(None);
+            return;
+        }
+    }
+    let Some(c) = callee.filter(|c| plan_takes(&c.uf, n)) else {
+        let _ = slot.set(None);
+        return;
+    };
+    let mut plan = Plan {
+        kind: c.kind.clone(),
+        uf: std::rc::Weak::new(),
+        uf_addr: 0,
+        n: 0,
+        typed: false,
+        defaults: false,
+        is_static: false,
+        fetches: kinds[..n]
+            .iter()
+            .any(|k| matches!(*k, PLAN_PLACE | PLAN_THIS)),
+        kinds,
+        idx,
+        dst,
+        first_op: 0,
+        done: at + n + 2,
+        class_addr: 0,
+        scope_addr: 0,
+        more: Default::default(),
+        method_scope: None,
+        called: None,
+    };
+    plan.uf = Rc::downgrade(&c.uf);
+    plan.uf_addr = Rc::as_ptr(&c.uf) as usize;
+    #[allow(clippy::cast_possible_truncation)] // at most `PLAN_ARGS`
+    {
+        plan.n = n as u8;
+    }
+    plan.typed = c.uf.call_shape() == CallShape::TYPED;
+    plan.defaults = n < c.uf.params.len();
+    plan.is_static = c.is_static;
+    plan.first_op = c.uf.plain_first_op(n);
+    plan.class_addr = c.class_addr;
+    plan.scope_addr = c.scope_addr;
+    plan.method_scope = c.method_scope;
+    plan.called = c.called;
+    // (Kept out of `memory_get_usage()`, like the other run-time caches.)
+    let _ = slot.set(Some(php_memlimit::persistent(|| Box::new(plan))));
+}
+
+/// Works out the plan of the function call site at `at` once its
+/// function cache is filled (the site's first call fills it the usual
+/// way).
+#[cold]
+#[inline(never)]
+pub(super) fn plan_build_fcall(code: &OpArray, at: usize, site: usize) {
+    let Some(&Op::InitFCall { name, fallback, .. }) = code.ops.get(at) else {
+        return;
+    };
+    let func = {
+        let cache = code.fcall_cache.borrow();
+        let by_name = || {
+            cache
+                .get(name as usize)
+                .and_then(Option::as_ref)
+                .and_then(crate::opcode::CachedFunc::get)
+        };
+        match fallback {
+            None => by_name(),
+            // As `init_ns_fcall_in` looks it up: the site's own slot (a
+            // resolved global fallback), else the namespaced name's.
+            Some(_) => match cache
+                .get(code.literals.len() + at + 1)
+                .and_then(Option::as_ref)
+            {
+                Some(entry) => entry.get(),
+                None => by_name(),
+            },
+        }
+    };
+    match func {
+        Some(Func::User(uf)) => plan_store(
+            code,
+            at,
+            site,
+            Some(PlanCallee {
+                kind: PlanKind::Function,
+                uf,
+                is_static: false,
+                class_addr: 0,
+                scope_addr: 0,
+                method_scope: None,
+                called: None,
+            }),
+        ),
+        Some(Func::Builtin(_)) => plan_store(code, at, site, None),
+        // Not resolved yet: looked at again by the next call.
+        None => {}
+    }
+}
+
+/// Works out the plan of the method call site at `at` (object operand
+/// `obj`) from its method cache entry for objects of the class at
+/// `cls_addr` called from the scope at `scope_addr`.
+#[cold]
+#[inline(never)]
+pub(super) fn plan_build_method(
+    code: &OpArray,
+    at: usize,
+    site: usize,
+    obj: Operand,
+    cls_addr: usize,
+    scope_addr: usize,
+    lit: u32,
+) {
+    match crate::call::method_entry_hit(code, at, cls_addr, scope_addr, lit) {
+        Some((Func::User(uf), scope, false)) => plan_store(
+            code,
+            at,
+            site,
+            Some(PlanCallee {
+                kind: PlanKind::Method(obj),
+                uf,
+                is_static: false,
+                class_addr: cls_addr,
+                scope_addr,
+                method_scope: scope.as_ref().map(Rc::downgrade),
+                called: None,
+            }),
+        ),
+        Some(_) => plan_store(code, at, site, None),
+        None => {}
+    }
+}
+
+/// Works out the plan of the static call site at `at` once its cache is
+/// filled: `Name::name()` from the site's function cache slot
+/// ([`prepare_static`]'s), `self::` / `parent::` / `static::name()` from
+/// its method cache entry ([`prepare_relative_static`]'s).
+#[cold]
+#[inline(never)]
+pub(super) fn plan_build_static(code: &OpArray, at: usize, site: usize) {
+    let Some(Op::InitStaticCall {
+        class,
+        name: Operand::Lit(_),
+    }) = code.ops.get(at)
+    else {
+        return;
+    };
+    if matches!(class, ClassSpec::Named(_)) {
+        let cache = code.fcall_cache.borrow();
+        let Some(entry) = cache
+            .get(code.literals.len() + at + 1)
+            .and_then(Option::as_ref)
+        else {
+            return;
+        };
+        let callee = match &entry.func {
+            crate::opcode::CachedFuncKind::User(w) => w.upgrade().map(|uf| PlanCallee {
+                kind: PlanKind::Static,
+                uf,
+                is_static: true,
+                class_addr: 0,
+                scope_addr: 0,
+                method_scope: entry.scope.clone(),
+                called: entry.called.clone(),
+            }),
+            crate::opcode::CachedFuncKind::Builtin(_) => None,
+        };
+        drop(cache);
+        plan_store(code, at, site, callee);
+        return;
+    }
+    let callee = {
+        let cache = code.method_cache.borrow();
+        let Some(e) = cache.get(at).and_then(Option::as_ref) else {
+            return;
+        };
+        match &e.func.func {
+            crate::opcode::CachedFuncKind::User(w) => w.upgrade().map(|uf| PlanCallee {
+                kind: PlanKind::Relative(class.clone()),
+                uf,
+                is_static: e.is_static,
+                class_addr: e.class_addr,
+                scope_addr: e.scope_addr,
+                method_scope: e.method_scope.clone(),
+                called: None,
+            }),
+            crate::opcode::CachedFuncKind::Builtin(_) => None,
+        }
+    };
+    plan_store(code, at, site, callee);
+}
+
+/// Whether the method plan `plan` of the site at `at` is also the plan of
+/// objects of the class at `cls_addr`: one of the further classes it
+/// took, or a class whose method (the site's method cache hit for it) is
+/// the plan's, which then becomes one of them while there is room.
+#[inline(never)]
+fn plan_takes_class(plan: &Plan, code: &OpArray, at: usize, cls_addr: usize) -> bool {
+    let Some(&Op::InitMethodCall {
+        name: Operand::Lit(lit),
+        ..
+    }) = code.ops.get(at)
+    else {
+        return false;
+    };
+    let mut free = None;
+    for slot in &plan.more {
+        match slot.borrow().as_ref() {
+            Some(w) if w.as_ptr() as usize == cls_addr && w.strong_count() > 0 => return true,
+            Some(_) => {}
+            None => free = free.or(Some(slot)),
+        }
+    }
+    let Some(free) = free else {
+        return false;
+    };
+    let Some((Func::User(uf), scope, false)) =
+        crate::call::method_entry_hit(code, at, cls_addr, plan.scope_addr, lit)
+    else {
+        return false;
+    };
+    let same_scope = match (&scope, &plan.method_scope) {
+        (Some(a), Some(b)) => Rc::as_ptr(a) == b.as_ptr(),
+        (None, None) => true,
+        _ => false,
+    };
+    if Rc::as_ptr(&uf) as usize != plan.uf_addr || !same_scope {
+        return false;
+    }
+    // The class itself, to hold it weakly: the method cache entry now
+    // first at the site is this class's.
+    let cache = code.method_cache.borrow();
+    match cache.get(at).and_then(Option::as_ref) {
+        Some(e) if e.class_addr == cls_addr => {
+            *free.borrow_mut() = Some(e.class.clone());
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The call's `$this`, class scope and called class.
+type PlanHandles = (
+    Option<Obj>,
+    Option<Rc<crate::class::Class>>,
+    Option<Rc<crate::class::Class>>,
+);
+
+/// The handles of a static call's frame, as [`prepare_static`] and
+/// [`prepare_relative_static`] set them: for `Name::name()` the cached
+/// scope and called class; for `self::` / `parent::` / `static::name()`
+/// the class the spec resolves to in the caller must be the plan's and
+/// the calling scope too, a static method then takes the caller's called
+/// class when that is a subclass of it (the three specs forward it), an
+/// instance method the caller's `$this` when its class is one. `None`
+/// for anything else (the call is then made the usual way).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `call_plain`
+fn plan_static_handles(plan: &Plan, caller: &crate::vm::Frame) -> Option<PlanHandles> {
+    let scope = match &plan.method_scope {
+        Some(w) => Some(w.upgrade()?),
+        None => None,
+    };
+    let PlanKind::Relative(spec) = &plan.kind else {
+        let called = match &plan.called {
+            Some(w) => Some(w.upgrade()?),
+            None => None,
+        };
+        return Some((None, scope, called));
+    };
+    if caller.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cls = crate::call::relative_spec_class(caller, spec)?;
+    let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    if Rc::as_ptr(cls) as usize != plan.class_addr || scope_addr != plan.scope_addr {
+        return None;
+    }
+    if plan.is_static {
+        let late_bound = match caller.called.as_ref() {
+            Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
+            _ => Rc::clone(cls),
+        };
+        return Some((None, scope, Some(late_bound)));
+    }
+    let this = caller.this.as_ref()?;
+    let late_bound = crate::object::class_of(this);
+    if !late_bound.is_subclass_of(cls) {
+        return None;
+    }
+    Some((Some(this.clone()), scope, Some(Rc::clone(late_bound))))
+}
+
+/// The call of the planned site at `at` of `code`, the current frame's,
+/// from its init to the callee's first op: the pooled frame readied for
+/// the plan's function, each argument copied or moved into its compiled
+/// variable, a method's `$this` and scopes set, the frame entered as
+/// [`enter`] enters it. `false`, nothing changed, when the object or the
+/// class is not the plan's, or an argument is not a defined value its
+/// parameter takes as it is: the call is then made the usual way.
+#[inline(never)]
+pub(super) fn call_plain(vm: &mut Vm, code: &OpArray, at: usize, site: usize) -> bool {
+    let Some(Some(plan)) = plan_slot(code, site).and_then(std::cell::OnceCell::get) else {
+        return false;
+    };
+    if plan.fetches {
+        return call_plain_fetching(vm, code, at, plan);
+    }
+    call_planned(vm, code, at, plan, None)
+}
+
+/// [`call_plain`] of a plan with arguments read from places or `$this`:
+/// the values read wait in a buffer of this function's until every
+/// argument is known to pass. (Out of line, so that a plan without such
+/// arguments has no buffer to set up and to drop.)
+#[inline(never)]
+fn call_plain_fetching(vm: &mut Vm, code: &OpArray, at: usize, plan: &Plan) -> bool {
+    let mut fetched: [Value; PLAN_ARGS] = std::array::from_fn(|_| Value::Null);
+    call_planned(vm, code, at, plan, Some(&mut fetched))
+}
+
+/// [`call_plain`] of the site's plan `plan`. `fetched`: the buffer for
+/// the values of arguments read from places or `$this`, for a plan that
+/// has such (inlined into each of its two callers, so that the one
+/// without a buffer carries nothing for them).
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::too_many_lines)] // the call sequence, in one piece
+fn call_planned(
+    vm: &mut Vm,
+    code: &OpArray,
+    at: usize,
+    plan: &Plan,
+    mut fetched: Option<&mut [Value; PLAN_ARGS]>,
+) -> bool {
+    let live = vm.frames.live;
+    if vm.observer.enabled || live == 0 || live > 50_000 {
+        return false;
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    // What the call's frame holds besides its arguments. A method's
+    // object must be of the plan's class, called from its scope; its
+    // handle is taken after the arguments are known to pass.
+    let mut handles: Option<PlanHandles> = None;
+    match &plan.kind {
+        PlanKind::Function => {}
+        PlanKind::Method(obj) => {
+            let o = match *obj {
+                Operand::Cv(cv) => {
+                    match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                        Some(Value::Object(o)) => o,
+                        _ => return false,
+                    }
+                }
+                Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+                    Some(Value::Object(o)) => o,
+                    _ => return false,
+                },
+                Operand::Unused => match caller.this.as_ref() {
+                    Some(o) => o,
+                    None => return false,
+                },
+                _ => return false,
+            };
+            let cls = crate::object::class_of(o);
+            let cls_addr = Rc::as_ptr(cls) as usize;
+            let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+            if plan.scope_addr != scope_addr
+                || cls.hooks.as_ref().and_then(|h| h.get_method).is_some()
+                || (plan.class_addr != cls_addr && !plan_takes_class(plan, code, at, cls_addr))
+            {
+                return false;
+            }
+        }
+        PlanKind::Static | PlanKind::Relative(_) => match plan_static_handles(plan, caller) {
+            Some(h) => handles = Some(h),
+            None => return false,
+        },
+    }
+    let n = plan.n as usize;
+    // Every argument a defined value held as it is, which its parameter
+    // takes as it is.
+    let typed = if plan.typed {
+        match plan.uf.upgrade() {
+            Some(uf) => Some(uf),
+            None => return false,
+        }
+    } else {
+        None
+    };
+    for i in 0..n {
+        let v = match plan.kinds[i] {
+            PLAN_CV => match caller
+                .cvs
+                .get(plan.idx[i] as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
+                Some(Value::Reference(_)) | None => return false,
+                Some(v) => v,
+            },
+            PLAN_TMP => match caller.tmps.get(plan.idx[i] as usize) {
+                Some(Value::Reference(_)) | None => return false,
+                Some(v) => v,
+            },
+            // Read now, moved in by the second pass.
+            PLAN_PLACE | PLAN_THIS => {
+                let Some(fetched) = fetched.as_deref_mut() else {
+                    return false;
+                };
+                let v = if plan.kinds[i] == PLAN_THIS {
+                    caller.this.as_ref().map(|o| Value::Object(o.clone()))
+                } else {
+                    caller.send_place_hit(plan.idx[i])
+                };
+                match v {
+                    Some(v) if !matches!(v, Value::Reference(_)) => {
+                        fetched[i] = v;
+                        &fetched[i]
+                    }
+                    _ => return false,
+                }
+            }
+            _ => match code.literals.get(plan.idx[i] as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+        };
+        if let Some(uf) = &typed {
+            if let Some(ty) = uf.params.get(i).and_then(|p| p.ty.as_ref()) {
+                if !crate::call::param_accepts(ty, v) {
+                    return false;
+                }
+            }
+        }
+    }
+    if frame.released_direct
+        && frame
+            .ufunc
+            .as_ref()
+            .is_some_and(|f| Rc::as_ptr(f) as usize == plan.uf_addr)
+    {
+        frame.released_direct = false;
+    } else {
+        let uf = match typed {
+            Some(uf) => uf,
+            None => match plan.uf.upgrade() {
+                Some(uf) => uf,
+                None => return false,
+            },
+        };
+        ready_frame_slow(frame, &uf);
+    }
+    for i in 0..n {
+        let v = match plan.kinds[i] {
+            PLAN_CV => caller
+                .cvs
+                .get(plan.idx[i] as usize)
+                .and_then(crate::vm::CvSlot::get)
+                .map(clone_value),
+            PLAN_TMP => caller
+                .tmps
+                .get_mut(plan.idx[i] as usize)
+                .map(std::mem::take),
+            PLAN_PLACE | PLAN_THIS => fetched
+                .as_deref_mut()
+                .map(|fetched| std::mem::take(&mut fetched[i])),
+            _ => code.literals.get(plan.idx[i] as usize).map(clone_value),
+        };
+        if let (Some(slot), Some(v)) = (frame.cvs.get_mut(i), v) {
+            if let Some(old) = slot.as_mut().replace(v) {
+                drop(old);
+            }
+        }
+    }
+    if let PlanKind::Method(obj) = &plan.kind {
+        // `$this`: the temporary's handle moved out, else a copy.
+        let this = match *obj {
+            Operand::Tmp(t) => match caller.tmps.get_mut(t as usize).map(std::mem::take) {
+                Some(Value::Object(o)) => Some(o),
+                _ => None,
+            },
+            Operand::Cv(cv) => match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => Some(o.clone()),
+                _ => None,
+            },
+            _ => caller.this.clone(),
+        };
+        let called = this.as_ref().map(|o| Rc::clone(crate::object::class_of(o)));
+        let scope = plan.method_scope.as_ref().and_then(std::rc::Weak::upgrade);
+        handles = Some((this, scope, called));
+    }
+    if let Some((this, scope, called)) = handles {
+        fill(&mut frame.this, this);
+        fill(&mut frame.scope, scope);
+        fill(&mut frame.called, called);
+    }
+    frame.ret = plan.dst.map_or(RetTarget::Discard, RetTarget::Tmp);
+    frame.caller_strict = code.strict_types;
+    frame.direct_argc = u32::from(plan.n);
+    frame.ip = plan.first_op;
+    if plan.defaults {
+        if let Some(uf) = frame.ufunc.clone() {
+            bind_literal_defaults(frame, &uf, n);
+        }
+    }
+    frame.direct = true;
+    frame.plain = true;
+    caller.ip = plan.done;
+    vm.frames.live = live + 1;
+    true
+}
 
 /// The most sums [`new_stored`] computes between the sends of one `new`.
 const NEW_SUMS: usize = 3;
@@ -3706,6 +4488,13 @@ pub(super) fn enter(
     }
     // Released by `Frame::release_direct` at its return.
     frame.direct = true;
+    // A plain declaration called without a closure: its return is the
+    // short one (`Vm::return_plain`), whatever started the call.
+    frame.plain = !prep.closure
+        && !prep.binds
+        && matches!(shape, CallShape::UNTYPED | CallShape::TYPED)
+        && uf.code.num_statics == 0
+        && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
     caller.ip = caller_ip;
     vm.frames.live = live + 1;
     Ok(())
